@@ -1,0 +1,31 @@
+ESTIMASI APP V13 FINAL
+
+Folder ini sudah lengkap. Di dalamnya ada:
+- package.json
+- package-lock.json
+- vite.config.js
+- index.html
+- folder src
+- folder public
+- file SQL Supabase
+
+CARA MENJALANKAN:
+1. Buka folder "estimasi-app-v13-final" langsung di VS Code.
+2. Terminal harus berakhir seperti:
+   ...\estimasi-app-v13-final>
+3. Jalankan: npm install
+4. Jalankan: npm run dev
+5. Buka http://localhost:5173
+
+PERBAIKAN UTAMA:
+- Dropdown Service Advisor membaca semua nama SA aktif dari Master Advisor.
+- Kepala Bengkel membaca role KABENG.
+- Tambah/edit/hapus advisor tetap tersedia.
+- Update harga jasa tetap tersedia.
+- Sidebar Database dan minimize/maximize tetap tersedia.
+- Supabase + cadangan penyimpanan lokal tetap tersedia.
+
+SUPABASE:
+- Salin .env.example menjadi .env
+- Isi VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY
+- Jalankan supabase_setup_v12.sql pada SQL Editor Supabase.

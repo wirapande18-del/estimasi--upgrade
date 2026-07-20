@@ -1,0 +1,23 @@
+{
+  "name": "estimasi-app-v13-final",
+  "private": true,
+  "version": "13.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "vite build"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "vite": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "@supabase/supabase-js": "latest",
+    "jspdf": "latest",
+    "html2canvas": "latest",
+    "tesseract.js": "latest"
+  },
+  "devDependencies": {}
+}

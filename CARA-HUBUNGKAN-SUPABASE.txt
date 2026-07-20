@@ -1,0 +1,25 @@
+CARA MENGHUBUNGKAN ESTIMASI APP V12 KE SUPABASE
+
+1. Buka project Supabase.
+2. Masuk SQL Editor, buka file supabase_setup_v12.sql, salin semuanya lalu klik Run.
+3. Masuk Project Settings > API.
+4. Salin Project URL dan anon public key.
+5. Di folder aplikasi, salin file .env.example lalu ubah namanya menjadi .env.
+6. Isi seperti ini:
+
+VITE_SUPABASE_URL=https://xxxxxxxx.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJxxxxxxxx
+
+7. Simpan file .env.
+8. Tutup terminal lama dengan Ctrl+C.
+9. Jalankan:
+   npm install
+   npm run dev
+
+TANDA BERHASIL:
+Bagian atas aplikasi menampilkan "Supabase tersambung".
+
+CATATAN:
+- Semua fitur lama tetap tersedia.
+- Data tetap disimpan juga di browser sebagai cadangan lokal.
+- Jangan membagikan service_role key. Gunakan anon public key saja.

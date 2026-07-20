@@ -1,0 +1,18 @@
+CARA MENJALANKAN APLIKASI
+
+1. Buka folder aplikasi ini di VS Code.
+2. Buka Terminal > New Terminal.
+3. Jalankan: npm install
+4. Setelah selesai jalankan: npm run dev
+5. Buka alamat http://localhost:5173
+
+CATATAN:
+- Aplikasi tetap bisa dibuka tanpa Supabase dan akan menyimpan data di browser/perangkat.
+- Untuk database online Supabase, salin .env.example menjadi .env lalu isi URL dan ANON KEY.
+- Menu Database dan sidebar sudah dapat diminimalkan/maksimalkan.
+
+PERBAIKAN v12.1:
+- Pilihan Nama Service Advisor sekarang dropdown dari Master Advisor.
+- Semua SA aktif langsung terlihat tanpa harus menghapus nama lama.
+- Pilihan Kepala Bengkel juga membaca role KABENG.
+- Nama lama tetap aman pada history/form lama.
