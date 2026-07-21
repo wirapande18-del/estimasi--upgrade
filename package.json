@@ -1,7 +1,7 @@
 {
-  "name": "estimasi-app-v13-final",
+  "name": "estimasi-app-v13-5-customer-sync",
   "private": true,
-  "version": "13.0.0",
+  "version": "13.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -17,7 +17,8 @@
     "@supabase/supabase-js": "latest",
     "jspdf": "latest",
     "html2canvas": "latest",
-    "tesseract.js": "latest"
+    "tesseract.js": "latest",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {}
 }

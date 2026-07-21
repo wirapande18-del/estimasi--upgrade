@@ -1,0 +1,16 @@
+ESTIMASI APP V13.5 - CUSTOMER SYNC
+
+Perbaikan utama:
+1. Upload Excel customer membaca header berdasarkan nama kolom:
+   POLICE_NO | MODEL | CUSTOMER | ADDRESS | RANGKA | TELEPHONE_CP
+2. Police No tidak lagi mengambil karakter belakang No Rangka.
+3. Data customer dari Supabase menjadi sumber utama agar sama di semua perangkat.
+4. Data customer lokal lama otomatis dipindahkan ke Supabase bila tabel online masih kosong.
+5. Customer pada form estimasi otomatis disinkronkan ke Supabase setelah perubahan.
+6. Tombol Refresh dari Supabase ditambahkan.
+7. Hapus customer per baris juga menghapus data online.
+
+PENTING:
+- Pastikan VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY di Vercel benar.
+- Jalankan supabase_setup_v12.sql di Supabase SQL Editor bila tabel/policy belum dibuat.
+- Setelah deploy, buka Master Customer lalu klik Refresh dari Supabase untuk memastikan data online terbaca.
