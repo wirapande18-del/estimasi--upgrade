@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import Tesseract from "tesseract.js";
+import * as XLSX from "xlsx";
 import { supabase, isSupabaseConfigured } from "./lib/supabase";
 import "./index.css";
 
@@ -79,6 +80,7 @@ export default function App() {
   const pdfRef = useRef(null);
   const filePartRef = useRef(null);
   const fileCustomerRef = useRef(null);
+  const customerSyncTimerRef = useRef(null);
   const [page, setPage] = useState("estimasi");
   const [form, setForm] = useState(emptyForm);
   const [history, setHistory] = useState(() => load("estimasi_history_v5", []));
@@ -137,19 +139,20 @@ export default function App() {
 
         if (!customersRes.error && customersRes.data) {
           const onlineCustomers = customersRes.data.map(customerFromDb);
-          // Jangan hapus cadangan lokal ketika tabel customer online masih kosong.
-          // Gabungkan berdasarkan nomor polisi agar data lokal lama tetap aman.
+          // Supabase menjadi sumber utama agar semua perangkat menampilkan data yang sama.
+          // Bila tabel online masih kosong, data lokal perangkat pertama dimigrasikan otomatis.
           setCustomerDb((localCustomers) => {
-            if (!onlineCustomers.length) return localCustomers;
-            const merged = [...onlineCustomers];
-            localCustomers.forEach((customer) => {
-              const key = norm(customer.polisi);
-              if (!key) return;
-              const idx = merged.findIndex((item) => norm(item.polisi) === key);
-              if (idx >= 0) merged[idx] = { ...customer, ...merged[idx] };
-              else merged.push(customer);
-            });
-            return merged;
+            if (onlineCustomers.length) return onlineCustomers;
+            const localValid = localCustomers.filter((c) => String(c.polisi || "").trim());
+            if (localValid.length) {
+              supabase.from("customers")
+                .upsert(localValid.map(customerToDb), { onConflict: "polisi" })
+                .then(({ error }) => {
+                  if (error) console.warn("Migrasi customer lokal gagal:", error.message);
+                  else setSyncStatus(`${localValid.length} customer lokal dipindahkan ke Supabase`);
+                });
+            }
+            return localValid;
           });
         } else if (customersRes.error) {
           console.warn("Supabase customer error:", customersRes.error.message);
@@ -211,6 +214,28 @@ export default function App() {
       if (idx >= 0) return prev.map((x, i) => i === idx ? { ...x, ...data } : x);
       return [...prev, data];
     });
+  }, [form.polisi, form.kendaraan, form.rangka, form.tahun, form.customer, form.contact, form.phone, form.alamat]);
+
+  // Sinkron otomatis customer yang sedang dikerjakan ke Supabase (debounce 800 ms).
+  useEffect(() => {
+    if (!isSupabaseConfigured || !String(form.polisi || "").trim()) return;
+    if (!form.customer && !form.kendaraan && !form.rangka && !form.phone && !form.alamat) return;
+    clearTimeout(customerSyncTimerRef.current);
+    customerSyncTimerRef.current = setTimeout(async () => {
+      const row = customerToDb({
+        polisi: String(form.polisi || "").trim().toUpperCase(),
+        kendaraan: form.kendaraan,
+        rangka: form.rangka,
+        tahun: form.tahun,
+        customer: form.customer,
+        contact: form.contact,
+        phone: form.phone,
+        alamat: form.alamat,
+      });
+      const { error } = await supabase.from("customers").upsert(row, { onConflict: "polisi" });
+      if (error) console.warn("Auto-sync customer gagal:", error.message);
+    }, 800);
+    return () => clearTimeout(customerSyncTimerRef.current);
   }, [form.polisi, form.kendaraan, form.rangka, form.tahun, form.customer, form.contact, form.phone, form.alamat]);
 
   const totals = useMemo(() => {
@@ -1008,8 +1033,58 @@ function MasterAdvisor({advisorDb,setAdvisorDb}){
   </section>
 }
 
+const CUSTOMER_HEADER_ALIASES = {
+  polisi: ["POLICE_NO", "POLICE NO", "POLICE", "NO POLISI", "NO_POLISI", "NOPOL", "PLAT", "PLATE"],
+  kendaraan: ["MODEL", "KENDARAAN", "TYPE", "TIPE", "VEHICLE"],
+  customer: ["CUSTOMER", "NAMA CUSTOMER", "NAMA_CUSTOMER", "PELANGGAN", "NAMA"],
+  alamat: ["ADDRESS", "ALAMAT"],
+  rangka: ["RANGKA", "NO RANGKA", "NO_RANGKA", "CHASSIS", "CHASSIS_NO", "VIN"],
+  phone: ["TELEPHONE_CP", "TELEPHONE CP", "NO TELP", "NO_TELP", "TELEPON", "PHONE", "HP", "WA CP"],
+};
+const cleanHeader = (v) => String(v || "").trim().toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+const findHeaderIndex = (headers, aliases) => {
+  const normalized = headers.map(cleanHeader);
+  return normalized.findIndex((h) => aliases.some((a) => h === cleanHeader(a)));
+};
+const rowsToCustomersByHeader = (matrix) => {
+  if (!Array.isArray(matrix) || !matrix.length) return [];
+  const headerRowIndex = matrix.findIndex((row) => {
+    const h = (row || []).map(cleanHeader);
+    return h.some((x) => ["POLICE NO", "POLICE", "NO POLISI", "POLICE NO"].includes(x))
+      && h.some((x) => ["RANGKA", "NO RANGKA", "VIN", "CHASSIS"].includes(x));
+  });
+  const start = headerRowIndex >= 0 ? headerRowIndex + 1 : 0;
+  const headers = headerRowIndex >= 0 ? matrix[headerRowIndex] : ["POLICE_NO", "MODEL", "CUSTOMER", "ADDRESS", "RANGKA", "TELEPHONE_CP"];
+  const indexes = Object.fromEntries(Object.entries(CUSTOMER_HEADER_ALIASES).map(([key, aliases]) => [key, findHeaderIndex(headers, aliases)]));
+  // Bila tidak ada header, pakai urutan format standar yang diberikan pengguna.
+  if (headerRowIndex < 0) Object.assign(indexes, { polisi:0, kendaraan:1, customer:2, alamat:3, rangka:4, phone:5 });
+  return matrix.slice(start).map((row) => ({
+    polisi: String(row?.[indexes.polisi] ?? "").trim().toUpperCase(),
+    kendaraan: String(row?.[indexes.kendaraan] ?? "").trim(),
+    customer: String(row?.[indexes.customer] ?? "").trim(),
+    alamat: String(row?.[indexes.alamat] ?? "").trim(),
+    rangka: String(row?.[indexes.rangka] ?? "").trim().toUpperCase(),
+    phone: String(row?.[indexes.phone] ?? "").trim(),
+    contact: "", tahun: "",
+  })).filter((x) => x.polisi && !/POLICE|POLISI/i.test(x.polisi));
+};
+
 function MasterCustomer({customerDb,setCustomerDb}){
   const [bulk, setBulk] = useState("");
+  const excelInputRef = useRef(null);
+  const mergeCustomers = (incoming) => {
+    const next = [...customerDb];
+    let processed = 0;
+    incoming.forEach((data) => {
+      if (!String(data.polisi || "").trim()) return;
+      const key = norm(data.polisi);
+      const idx = next.findIndex((x) => norm(x.polisi) === key);
+      if (idx >= 0) next[idx] = { ...next[idx], ...data };
+      else next.push(data);
+      processed++;
+    });
+    return { next, processed };
+  };
   const saveCustomerOnline = async (rowsData, successText) => {
     const validRows = rowsData.filter((c) => String(c.polisi || "").trim()).map(customerToDb);
     if (!validRows.length) {
@@ -1029,62 +1104,76 @@ function MasterCustomer({customerDb,setCustomerDb}){
     }
   };
   const importBulk = async () => {
-    const rows = parseImportRows(bulk);
-    if (!rows.length) {
-      alert("Paste data customer dari Excel terlebih dahulu.");
-      return;
+    const matrix = parseImportRows(bulk);
+    if (!matrix.length) { alert("Paste data customer dari Excel terlebih dahulu."); return; }
+    const incoming = rowsToCustomersByHeader(matrix);
+    const { next, processed } = mergeCustomers(incoming);
+    if (!processed) { alert("Tidak ada baris customer yang valid. Pastikan ada kolom POLICE_NO."); return; }
+    setCustomerDb(next); setBulk("");
+    await saveCustomerOnline(next, `${processed} customer diproses. POLICE_NO dibaca sebagai plat dan RANGKA tetap sebagai nomor rangka.`);
+  };
+  const importExcel = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data, { type: "array" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
+      const incoming = rowsToCustomersByHeader(matrix);
+      const { next, processed } = mergeCustomers(incoming);
+      if (!processed) throw new Error("Kolom POLICE_NO tidak ditemukan atau semua baris kosong");
+      setCustomerDb(next);
+      await saveCustomerOnline(next, `${processed} customer dari Excel berhasil diimpor dan disinkronkan.`);
+    } catch (err) {
+      console.error(err);
+      alert(`Import Excel gagal: ${err?.message || "format file tidak terbaca"}`);
     }
-    const next = [...customerDb];
-    let processed = 0;
-    rows.forEach((cols) => {
-      if (cols.length < 3) return;
-      const [polisi, kendaraan, customer, alamat, rangka, phone] = cols;
-      if (/police|polisi/i.test(polisi)) return;
-      const data = { polisi, kendaraan, customer, alamat: alamat || "", rangka: rangka || "", phone: phone || "", contact: "", tahun: "" };
-      if (!data.polisi) return;
-      const key = data.polisi.replace(/\s|-/g, "").toUpperCase();
-      const idx = next.findIndex((x) => (x.polisi || "").replace(/\s|-/g, "").toUpperCase() === key);
-      if (idx >= 0) next[idx] = { ...next[idx], ...data }; else next.push(data);
-      processed++;
-    });
-    setCustomerDb(next);
-    setBulk("");
-    if (!processed) {
-      alert("Tidak ada baris customer yang valid. Periksa urutan kolom Excel.");
-      return;
-    }
-    await saveCustomerOnline(next, `${processed} customer diproses dan langsung disimpan ke Supabase.`);
+  };
+  const refreshOnline = async () => {
+    try {
+      if (!isSupabaseConfigured) throw new Error("Supabase belum dikonfigurasi");
+      const { data, error } = await supabase.from("customers").select("*").order("polisi", { ascending: true });
+      if (error) throw error;
+      setCustomerDb((data || []).map(customerFromDb));
+      alert(`${data?.length || 0} customer dimuat dari Supabase.`);
+    } catch (err) { alert(`Gagal memuat Supabase: ${err?.message || "kesalahan"}`); }
   };
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(customerDb, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob); const a = document.createElement("a");
     a.href = url; a.download = "master-customer.json"; a.click(); URL.revokeObjectURL(url);
   };
-  const saveOnline = async () => {
-    await saveCustomerOnline(customerDb, "Master customer berhasil disimpan/update ke Supabase.");
+  const saveOnline = async () => saveCustomerOnline(customerDb, "Master customer berhasil disimpan/update ke Supabase.");
+  const deleteOne = async (c, index) => {
+    setCustomerDb(customerDb.filter((_,j)=>j!==index));
+    if (!isSupabaseConfigured || !c.polisi) return;
+    const { error } = await supabase.from("customers").delete().eq("polisi", c.polisi);
+    if (error) alert(`Baris hilang dari layar, tetapi gagal dihapus di Supabase: ${error.message}`);
   };
   const deleteAll = async () => {
-    if (!confirm("Hapus semua master customer?")) return;
-    setCustomerDb([]);
-    localStorage.removeItem("customer_db_v5");
+    if (!confirm("Hapus semua master customer dari semua perangkat?")) return;
+    setCustomerDb([]); localStorage.removeItem("customer_db_v5");
     try {
+      if (!isSupabaseConfigured) throw new Error("Supabase belum dikonfigurasi");
       const { error } = await supabase.from("customers").delete().neq("polisi", "__never__");
       if (error) throw error;
       alert("Semua master customer sudah dihapus dari aplikasi dan Supabase.");
-    } catch (err) {
-      console.error(err);
-      alert("Customer di aplikasi sudah kosong, tapi gagal hapus di Supabase. Cek RLS policy / CORS.");
-    }
+    } catch (err) { alert(`Customer lokal sudah kosong, tetapi Supabase gagal dihapus: ${err?.message || "kesalahan"}`); }
   };
   return <section style={styles.card}><h1>Master Customer</h1>
-    <p><b>Input banyak sekaligus:</b> copy dari Excel lalu paste di bawah. Format: Police No | Model | Customer | Alamat | No Rangka | No Telp.</p>
-    <textarea value={bulk} onChange={(e)=>setBulk(e.target.value)} placeholder={'Contoh dari Excel:\nDK-1848-FBT\tRUSH\tWEDA GAMA\tPERUM DALUNG...\tMHK...\t62812...'} style={styles.bulkBox}/>
-    <button style={styles.green} onClick={importBulk}>Import Customer Banyak</button>
+    <p><b>Format Excel:</b> POLICE_NO | MODEL | CUSTOMER | ADDRESS | RANGKA | TELEPHONE_CP. Nama kolom dibaca berdasarkan header, jadi plat tidak akan diambil dari belakang nomor rangka.</p>
+    <input ref={excelInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={importExcel} style={{display:"none"}}/>
+    <button style={styles.green} onClick={()=>excelInputRef.current?.click()}>Upload Excel Customer</button>
+    <button style={styles.btn} onClick={refreshOnline}>Refresh dari Supabase</button>
+    <textarea value={bulk} onChange={(e)=>setBulk(e.target.value)} placeholder={'Bisa juga copy-paste dari Excel beserta header:\nPOLICE_NO\tMODEL\tCUSTOMER\tADDRESS\tRANGKA\tTELEPHONE_CP'} style={styles.bulkBox}/>
+    <button style={styles.green} onClick={importBulk}>Import Customer dari Paste</button>
     <button style={styles.btn} onClick={saveOnline}>Simpan Semua Customer</button>
     <button style={styles.red} onClick={deleteAll}>Delete All Customer</button>
     <button style={styles.btn} onClick={exportJson}>Export Backup</button>
     <button style={styles.btn} onClick={()=>setCustomerDb([...customerDb,{polisi:"",kendaraan:"",customer:"",alamat:"",rangka:"",phone:""}])}>+ Add Customer</button>
-    <table style={styles.table}><thead><tr><th>Police No</th><th>Model</th><th>Customer</th><th>Alamat</th><th>No Rangka</th><th>No Telp</th><th>Act</th></tr></thead><tbody>{customerDb.map((c,i)=><tr key={i}>{["polisi","kendaraan","customer","alamat","rangka","phone"].map(k=><td key={k}><input value={c[k]||""} onChange={e=>setCustomerDb(customerDb.map((x,j)=>j===i?{...x,[k]:e.target.value}:x))} style={styles.cellInput}/></td>)}<td><button style={styles.del} onClick={()=>setCustomerDb(customerDb.filter((_,j)=>j!==i))}>Hapus</button></td></tr>)}</tbody></table></section>
+    <table style={styles.table}><thead><tr><th>Police No</th><th>Model</th><th>Customer</th><th>Alamat</th><th>No Rangka</th><th>No Telp</th><th>Act</th></tr></thead><tbody>{customerDb.map((c,i)=><tr key={c.id || `${norm(c.polisi)}-${i}`}>{["polisi","kendaraan","customer","alamat","rangka","phone"].map(k=><td key={k}><input value={c[k]||""} onChange={e=>setCustomerDb(customerDb.map((x,j)=>j===i?{...x,[k]:e.target.value}:x))} style={styles.cellInput}/></td>)}<td><button style={styles.del} onClick={()=>deleteOne(c,i)}>Hapus</button></td></tr>)}</tbody></table></section>
 }
 function PDFView({refx,form,totals}){
   const tanggal = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
