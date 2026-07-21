@@ -136,7 +136,21 @@ export default function App() {
         }
 
         if (!customersRes.error && customersRes.data) {
-          setCustomerDb(customersRes.data.map(customerFromDb));
+          const onlineCustomers = customersRes.data.map(customerFromDb);
+          // Jangan hapus cadangan lokal ketika tabel customer online masih kosong.
+          // Gabungkan berdasarkan nomor polisi agar data lokal lama tetap aman.
+          setCustomerDb((localCustomers) => {
+            if (!onlineCustomers.length) return localCustomers;
+            const merged = [...onlineCustomers];
+            localCustomers.forEach((customer) => {
+              const key = norm(customer.polisi);
+              if (!key) return;
+              const idx = merged.findIndex((item) => norm(item.polisi) === key);
+              if (idx >= 0) merged[idx] = { ...customer, ...merged[idx] };
+              else merged.push(customer);
+            });
+            return merged;
+          });
         } else if (customersRes.error) {
           console.warn("Supabase customer error:", customersRes.error.message);
         }
@@ -996,9 +1010,32 @@ function MasterAdvisor({advisorDb,setAdvisorDb}){
 
 function MasterCustomer({customerDb,setCustomerDb}){
   const [bulk, setBulk] = useState("");
-  const importBulk = () => {
+  const saveCustomerOnline = async (rowsData, successText) => {
+    const validRows = rowsData.filter((c) => String(c.polisi || "").trim()).map(customerToDb);
+    if (!validRows.length) {
+      alert("Tidak ada data customer yang bisa disimpan. Pastikan Nomor Polisi sudah diisi.");
+      return false;
+    }
+    try {
+      if (!isSupabaseConfigured) throw new Error("Supabase belum dikonfigurasi");
+      const { error } = await supabase.from("customers").upsert(validRows, { onConflict: "polisi" });
+      if (error) throw error;
+      alert(successText || `${validRows.length} customer berhasil disimpan ke Supabase.`);
+      return true;
+    } catch (err) {
+      console.error("Gagal menyimpan customer:", err);
+      alert(`Data tersimpan di browser, tetapi gagal masuk Supabase: ${err?.message || "kesalahan tidak diketahui"}`);
+      return false;
+    }
+  };
+  const importBulk = async () => {
     const rows = parseImportRows(bulk);
+    if (!rows.length) {
+      alert("Paste data customer dari Excel terlebih dahulu.");
+      return;
+    }
     const next = [...customerDb];
+    let processed = 0;
     rows.forEach((cols) => {
       if (cols.length < 3) return;
       const [polisi, kendaraan, customer, alamat, rangka, phone] = cols;
@@ -1008,10 +1045,15 @@ function MasterCustomer({customerDb,setCustomerDb}){
       const key = data.polisi.replace(/\s|-/g, "").toUpperCase();
       const idx = next.findIndex((x) => (x.polisi || "").replace(/\s|-/g, "").toUpperCase() === key);
       if (idx >= 0) next[idx] = { ...next[idx], ...data }; else next.push(data);
+      processed++;
     });
     setCustomerDb(next);
     setBulk("");
-    alert(`${rows.length} baris customer diproses.`);
+    if (!processed) {
+      alert("Tidak ada baris customer yang valid. Periksa urutan kolom Excel.");
+      return;
+    }
+    await saveCustomerOnline(next, `${processed} customer diproses dan langsung disimpan ke Supabase.`);
   };
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(customerDb, null, 2)], { type: "application/json" });
@@ -1019,17 +1061,7 @@ function MasterCustomer({customerDb,setCustomerDb}){
     a.href = url; a.download = "master-customer.json"; a.click(); URL.revokeObjectURL(url);
   };
   const saveOnline = async () => {
-    try {
-      const rows = customerDb.filter((c) => c.polisi).map(customerToDb);
-      if (rows.length) {
-        const { error } = await supabase.from("customers").upsert(rows, { onConflict: "polisi" });
-        if (error) throw error;
-      }
-      alert("Master customer sudah disimpan/update ke Supabase.");
-    } catch (err) {
-      console.error(err);
-      alert("Gagal update customer ke Supabase. Cek RLS policy / CORS.");
-    }
+    await saveCustomerOnline(customerDb, "Master customer berhasil disimpan/update ke Supabase.");
   };
   const deleteAll = async () => {
     if (!confirm("Hapus semua master customer?")) return;
@@ -1048,7 +1080,7 @@ function MasterCustomer({customerDb,setCustomerDb}){
     <p><b>Input banyak sekaligus:</b> copy dari Excel lalu paste di bawah. Format: Police No | Model | Customer | Alamat | No Rangka | No Telp.</p>
     <textarea value={bulk} onChange={(e)=>setBulk(e.target.value)} placeholder={'Contoh dari Excel:\nDK-1848-FBT\tRUSH\tWEDA GAMA\tPERUM DALUNG...\tMHK...\t62812...'} style={styles.bulkBox}/>
     <button style={styles.green} onClick={importBulk}>Import Customer Banyak</button>
-    <button style={styles.btn} onClick={saveOnline}>Update Customer Online</button>
+    <button style={styles.btn} onClick={saveOnline}>Simpan Semua Customer</button>
     <button style={styles.red} onClick={deleteAll}>Delete All Customer</button>
     <button style={styles.btn} onClick={exportJson}>Export Backup</button>
     <button style={styles.btn} onClick={()=>setCustomerDb([...customerDb,{polisi:"",kendaraan:"",customer:"",alamat:"",rangka:"",phone:""}])}>+ Add Customer</button>
