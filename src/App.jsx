@@ -1252,9 +1252,9 @@ function PDFView({refx,form,totals}){
         Harga diatas sudah termasuk PPN. Item Part, Pekerjaan dan Harga diatas tidak mengikat sewaktu-waktu dapat berubah. Setelah disetujui mohon ditanda tangani lalu di whatsapp message ke No. 085739025257 / 085338175251.<br/><br/>
         Untuk memudahkan pendaftaran saat kedatangan servis, silahkan Booking ke Petugas Estimasi atau whatsapp message ke No. 085739025257 / 085338175251.
       </div>
-      <div style={styles.pdfSignBox}>Disiapkan Oleh,<br/><br/><br/><b>{form.staff}</b><br/><small>{form.jabatan || "Service Advisor"}</small></div>
-      <div style={styles.pdfSignBox}>Disetujui Oleh,<br/><br/><br/><b>{form.kepalaBengkel}</b><br/><small>(Kepala Bengkel)</small></div>
-      <div style={styles.pdfSignBox}>Pelanggan,<br/><br/><br/><b>{form.customer || "-"}</b></div>
+      <div style={styles.pdfSignBox}>Disiapkan Oleh,<br/><br/><br/><br/><br/><b>{form.staff}</b><br/><small>{form.jabatan || "Service Advisor"}</small></div>
+      <div style={styles.pdfSignBox}>Disetujui Oleh,<br/><br/><br/><br/><br/><b>{form.kepalaBengkel}</b><br/><small>(Kepala Bengkel)</small></div>
+      <div style={styles.pdfSignBox}>Pelanggan,<br/><br/><br/><br/><br/><b>{form.customer || "-"}</b></div>
     </div>
     <p style={styles.pdfThanks}>Terima kasih atas kepercayaan Anda kepada Agung Toyota Gianyar.</p>
   </div>
