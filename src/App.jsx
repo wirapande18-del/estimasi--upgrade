@@ -15,6 +15,27 @@ const load = (key, fallback) => {
 };
 const save = (key, value) => localStorage.setItem(key, JSON.stringify(value));
 
+// Supabase/PostgREST biasanya membatasi satu permintaan ke 1.000 baris.
+// Ambil semua halaman agar ribuan master customer tetap terbaca setelah refresh.
+const fetchAllRows = async (table, orderColumn) => {
+  const pageSize = 1000;
+  let from = 0;
+  let allRows = [];
+  while (true) {
+    const { data, error } = await supabase
+      .from(table)
+      .select("*")
+      .order(orderColumn, { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) return { data: null, error };
+    const rows = data || [];
+    allRows = allRows.concat(rows);
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+  return { data: allRows, error: null };
+};
+
 const defaultParts = [
   { partNo: "08880-85986", partName: "TMO 10W-30 SN 1L", price: 117000 },
   { partNo: "15601-BZ030", partName: "OIL FILTER", price: 30000 },
@@ -111,7 +132,7 @@ export default function App() {
           supabase.from("spareparts").select("*").order("part_no", { ascending: true }),
           supabase.from("sublets").select("*").order("sublet_name", { ascending: true }),
           supabase.from("advisors").select("*").order("nama", { ascending: true }),
-          supabase.from("customers").select("*").order("polisi", { ascending: true }),
+          fetchAllRows("customers", "polisi"),
           supabase.from("estimasi_history").select("*").order("created_at", { ascending: false }),
           supabase.from("labor_prices").select("*").order("name", { ascending: true }),
         ]);
@@ -1103,6 +1124,7 @@ const rowsToCustomersByHeader = (matrix) => {
 function MasterCustomer({customerDb,setCustomerDb}){
   const [bulk, setBulk] = useState("");
   const excelInputRef = useRef(null);
+  const originalPoliceRef = useRef({});
   const [busy, setBusy] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
   const mergeCustomers = (incoming) => {
@@ -1175,7 +1197,7 @@ function MasterCustomer({customerDb,setCustomerDb}){
     setBusy(true); setSyncMessage("Memuat Customer dari Supabase...");
     try {
       if (!isSupabaseConfigured) throw new Error("Supabase belum dikonfigurasi");
-      const { data, error } = await supabase.from("customers").select("*").order("polisi", { ascending: true });
+      const { data, error } = await fetchAllRows("customers", "polisi");
       if (error) throw error;
       setCustomerDb((data || []).map(customerFromDb));
       setSyncMessage(`✅ ${data?.length || 0} Customer dimuat dari Supabase.`);
@@ -1189,6 +1211,24 @@ function MasterCustomer({customerDb,setCustomerDb}){
     a.href = url; a.download = "master-customer.json"; a.click(); URL.revokeObjectURL(url);
   };
   const saveOnline = async () => saveCustomerOnline(customerDb, "Master customer berhasil disimpan/update ke Supabase.");
+  const saveCustomerCell = async (row, index, key, value) => {
+    const updated = { ...row, [key]: value };
+    setCustomerDb((prev) => prev.map((x,j)=>j===index ? updated : x));
+    if (key === "polisi") {
+      const oldPolice = originalPoliceRef.current[index];
+      const newPolice = String(value || "").trim().toUpperCase();
+      if (oldPolice && norm(oldPolice) !== norm(newPolice) && isSupabaseConfigured) {
+        const { error } = await supabase.from("customers").delete().eq("polisi", oldPolice);
+        if (error) {
+          setSyncMessage(`❌ Plat lama gagal diganti: ${error.message}`);
+          return;
+        }
+      }
+      updated.polisi = newPolice;
+      originalPoliceRef.current[index] = newPolice;
+    }
+    await saveCustomerOnline([updated], "Customer otomatis tersimpan.", true);
+  };
   const deleteOne = async (c, index) => {
     setCustomerDb(customerDb.filter((_,j)=>j!==index));
     if (!isSupabaseConfigured || !c.polisi) return;
@@ -1217,7 +1257,7 @@ function MasterCustomer({customerDb,setCustomerDb}){
     <button style={styles.red} onClick={deleteAll}>Delete All Customer</button>
     <button style={styles.btn} onClick={exportJson}>Export Backup</button>
     <button style={styles.btn} onClick={()=>setCustomerDb([...customerDb,{polisi:"",kendaraan:"",customer:"",alamat:"",rangka:"",phone:""}])}>+ Add Customer</button>
-    <table style={styles.table}><thead><tr><th>Police No</th><th>Model</th><th>Customer</th><th>Alamat</th><th>No Rangka</th><th>No Telp</th><th>Act</th></tr></thead><tbody>{customerDb.map((c,i)=><tr key={c.id || `${norm(c.polisi)}-${i}`}>{["polisi","kendaraan","customer","alamat","rangka","phone"].map(k=><td key={k}><input value={c[k]||""} onChange={e=>setCustomerDb(customerDb.map((x,j)=>j===i?{...x,[k]:e.target.value}:x))} onBlur={()=>saveCustomerOnline([c],"Customer otomatis tersimpan.",true)} style={styles.cellInput}/></td>)}<td><button style={styles.del} disabled={busy} onClick={()=>deleteOne(c,i)}>Hapus</button></td></tr>)}</tbody></table></section>
+    <table style={styles.table}><thead><tr><th>Police No</th><th>Model</th><th>Customer</th><th>Alamat</th><th>No Rangka</th><th>No Telp</th><th>Act</th></tr></thead><tbody>{customerDb.map((c,i)=><tr key={c.id || i}>{["polisi","kendaraan","customer","alamat","rangka","phone"].map(k=><td key={k}><input value={c[k]||""} onFocus={()=>{if(k==="polisi") originalPoliceRef.current[i]=c.polisi;}} onChange={e=>setCustomerDb(customerDb.map((x,j)=>j===i?{...x,[k]:e.target.value}:x))} onBlur={e=>saveCustomerCell(c,i,k,e.target.value)} style={styles.cellInput}/></td>)}<td><button style={styles.del} disabled={busy} onClick={()=>deleteOne(c,i)}>Hapus</button></td></tr>)}</tbody></table></section>
 }
 function PDFView({refx,form,totals}){
   const tanggal = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
