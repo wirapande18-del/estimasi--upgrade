@@ -857,6 +857,8 @@ function MasterPart({partDb,setPartDb}){
 function MasterSublet({subletDb,setSubletDb}){
   const [bulk, setBulk] = useState("");
   const [bulkHarga, setBulkHarga] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
   const importBulk = async () => {
     const rows = parseImportRows(bulk);
     const next = [...subletDb];
@@ -897,18 +899,45 @@ function MasterSublet({subletDb,setSubletDb}){
     setBulkHarga("");
     await saveSubletOnline(next, `${processed} harga sublet diproses dan disimpan online.`);
   };
-  const saveSubletOnline = async (rowsData = subletDb, successText = "Master sublet sudah disimpan/update ke Supabase.") => {
+  const saveSubletOnline = async (rowsData = subletDb, successText = "Master sublet sudah disimpan/update ke Supabase.", silent = false) => {
+    setBusy(true); setSyncMessage("Memproses dan menyimpan ke Supabase...");
     try {
+      if (!isSupabaseConfigured) throw new Error("Supabase belum dikonfigurasi");
       const rows = rowsData.filter((s) => s.subletNo || s.subletName).map(subletToDb);
       if (rows.length) {
         const { error } = await supabase.from("sublets").upsert(rows, { onConflict: "sublet_no" });
         if (error) throw error;
       }
-      alert(successText);
+      setSyncMessage(`✅ ${successText}`);
+      if (!silent) alert(successText);
+      return true;
     } catch (err) {
       console.error(err);
-      alert("Data sublet tersimpan di browser, tapi gagal simpan ke Supabase. Pastikan tabel sublets sudah dibuat dan RLS policy benar.");
+      const message = `❌ Gagal simpan Sublet: ${err?.message || "periksa tabel dan RLS Supabase"}`;
+      setSyncMessage(message);
+      if (!silent) alert(message);
+      return false;
+    } finally {
+      setBusy(false);
     }
+  };
+  const refreshOnline = async () => {
+    setBusy(true); setSyncMessage("Memuat data Sublet dari Supabase...");
+    try {
+      const { data, error } = await supabase.from("sublets").select("*").order("sublet_name", { ascending: true });
+      if (error) throw error;
+      setSubletDb((data || []).map(subletFromDb));
+      setSyncMessage(`✅ ${data?.length || 0} Sublet dimuat dari Supabase.`);
+    } catch (err) { setSyncMessage(`❌ Gagal memuat Sublet: ${err?.message || "kesalahan"}`); }
+    finally { setBusy(false); }
+  };
+  const deleteOne = async (row, index) => {
+    setSubletDb(subletDb.filter((_,j)=>j!==index));
+    if (!isSupabaseConfigured || !row.subletNo) return;
+    setBusy(true); setSyncMessage("Menghapus Sublet dari Supabase...");
+    const { error } = await supabase.from("sublets").delete().eq("sublet_no", row.subletNo);
+    setSyncMessage(error ? `❌ Gagal menghapus: ${error.message}` : "✅ Sublet berhasil dihapus.");
+    setBusy(false);
   };
   const deleteAll = async () => {
     if (!confirm("Hapus semua master sublet? Data history lama tidak ikut terhapus.")) return;
@@ -924,19 +953,21 @@ function MasterSublet({subletDb,setSubletDb}){
     }
   };
   return <section style={styles.card}><h1>Master Sublet</h1>
+    {syncMessage && <div style={{padding:10,marginBottom:10,borderRadius:6,background:syncMessage.startsWith("❌")?"#fee2e2":syncMessage.startsWith("✅")?"#dcfce7":"#dbeafe"}}>{syncMessage}</div>}
     <p><b>Input banyak sekaligus:</b> copy dari Excel lalu paste di bawah. Format: Kode Sublet | Nama Sublet | Price.</p>
     <textarea value={bulk} onChange={(e)=>setBulk(e.target.value)} placeholder={'Contoh dari Excel:\nSBL-001\tSpooring\t250000\nSBL-002\tBalancing\t150000'} style={styles.bulkBox}/>
-    <button style={styles.green} onClick={importBulk}>Import Sublet Banyak</button>
-    <button style={styles.btn} onClick={()=>saveSubletOnline()}>Update Sublet Online</button>
+    <button style={styles.green} disabled={busy} onClick={importBulk}>{busy ? "Memproses..." : "Import Sublet Banyak"}</button>
+    <button style={styles.btn} disabled={busy} onClick={()=>saveSubletOnline()}>{busy ? "Memproses..." : "Update Sublet Online"}</button>
+    <button style={styles.btn} disabled={busy} onClick={refreshOnline}>{busy ? "Memproses..." : "Refresh dari Supabase"}</button>
     <div style={{marginTop:18,padding:12,border:"1px solid #ddd",borderRadius:8,background:"#fafafa"}}>
       <b>Update Harga Sublet</b>
       <p style={{margin:"6px 0 8px"}}>Paste dari Excel jika ada perubahan harga. Format: Kode Sublet | Nama Sublet | Price, atau Nama Sublet | Price.</p>
       <textarea value={bulkHarga} onChange={(e)=>setBulkHarga(e.target.value)} placeholder={'Contoh:\nSBL-001\tSpooring\t275000\nBalancing\t175000'} style={styles.bulkBox}/>
-      <button style={styles.blue} onClick={updateHargaBulk}>Update Harga Sublet</button>
+      <button style={styles.blue} disabled={busy} onClick={updateHargaBulk}>{busy ? "Memproses..." : "Update Harga Sublet"}</button>
     </div>
     <button style={styles.red} onClick={deleteAll}>Delete All Sublet</button>
     <button style={styles.btn} onClick={()=>setSubletDb([...subletDb,{subletNo:"",subletName:"",price:0}])}>+ Add Sublet</button>
-    <table style={styles.table}><thead><tr><th>Kode Sublet</th><th>Nama Sublet</th><th>Price</th><th>Act</th></tr></thead><tbody>{subletDb.map((p,i)=><tr key={i}><td><input value={p.subletNo} onChange={e=>setSubletDb(subletDb.map((x,j)=>j===i?{...x,subletNo:e.target.value}:x))} style={styles.cellInput}/></td><td><input value={p.subletName} onChange={e=>setSubletDb(subletDb.map((x,j)=>j===i?{...x,subletName:e.target.value}:x))} style={styles.cellInput}/></td><td><input value={p.price} onChange={e=>setSubletDb(subletDb.map((x,j)=>j===i?{...x,price:toNumber(e.target.value)}:x))} style={styles.cellInput}/></td><td><button style={styles.del} onClick={()=>setSubletDb(subletDb.filter((_,j)=>j!==i))}>Hapus</button></td></tr>)}</tbody></table>
+    <table style={styles.table}><thead><tr><th>Kode Sublet</th><th>Nama Sublet</th><th>Price</th><th>Act</th></tr></thead><tbody>{subletDb.map((p,i)=><tr key={i}><td><input value={p.subletNo} onChange={e=>setSubletDb(subletDb.map((x,j)=>j===i?{...x,subletNo:e.target.value}:x))} onBlur={()=>saveSubletOnline([p],"Sublet otomatis tersimpan.",true)} style={styles.cellInput}/></td><td><input value={p.subletName} onChange={e=>setSubletDb(subletDb.map((x,j)=>j===i?{...x,subletName:e.target.value}:x))} onBlur={()=>saveSubletOnline([p],"Sublet otomatis tersimpan.",true)} style={styles.cellInput}/></td><td><input value={p.price} onChange={e=>setSubletDb(subletDb.map((x,j)=>j===i?{...x,price:toNumber(e.target.value)}:x))} onBlur={()=>saveSubletOnline([p],"Sublet otomatis tersimpan.",true)} style={styles.cellInput}/></td><td><button style={styles.del} disabled={busy} onClick={()=>deleteOne(p,i)}>Hapus</button></td></tr>)}</tbody></table>
   </section>
 }
 
@@ -1072,6 +1103,8 @@ const rowsToCustomersByHeader = (matrix) => {
 function MasterCustomer({customerDb,setCustomerDb}){
   const [bulk, setBulk] = useState("");
   const excelInputRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
   const mergeCustomers = (incoming) => {
     const next = [...customerDb];
     let processed = 0;
@@ -1085,22 +1118,29 @@ function MasterCustomer({customerDb,setCustomerDb}){
     });
     return { next, processed };
   };
-  const saveCustomerOnline = async (rowsData, successText) => {
+  const saveCustomerOnline = async (rowsData, successText, silent = false) => {
     const validRows = rowsData.filter((c) => String(c.polisi || "").trim()).map(customerToDb);
     if (!validRows.length) {
-      alert("Tidak ada data customer yang bisa disimpan. Pastikan Nomor Polisi sudah diisi.");
+      if (!silent) alert("Tidak ada data customer yang bisa disimpan. Pastikan Nomor Polisi sudah diisi.");
       return false;
     }
+    setBusy(true); setSyncMessage("Memproses dan menyimpan Customer ke Supabase...");
     try {
       if (!isSupabaseConfigured) throw new Error("Supabase belum dikonfigurasi");
       const { error } = await supabase.from("customers").upsert(validRows, { onConflict: "polisi" });
       if (error) throw error;
-      alert(successText || `${validRows.length} customer berhasil disimpan ke Supabase.`);
+      const message = successText || `${validRows.length} customer berhasil disimpan ke Supabase.`;
+      setSyncMessage(`✅ ${message}`);
+      if (!silent) alert(message);
       return true;
     } catch (err) {
       console.error("Gagal menyimpan customer:", err);
-      alert(`Data tersimpan di browser, tetapi gagal masuk Supabase: ${err?.message || "kesalahan tidak diketahui"}`);
+      const message = `❌ Gagal simpan Customer: ${err?.message || "kesalahan tidak diketahui"}`;
+      setSyncMessage(message);
+      if (!silent) alert(message);
       return false;
+    } finally {
+      setBusy(false);
     }
   };
   const importBulk = async () => {
@@ -1132,13 +1172,16 @@ function MasterCustomer({customerDb,setCustomerDb}){
     }
   };
   const refreshOnline = async () => {
+    setBusy(true); setSyncMessage("Memuat Customer dari Supabase...");
     try {
       if (!isSupabaseConfigured) throw new Error("Supabase belum dikonfigurasi");
       const { data, error } = await supabase.from("customers").select("*").order("polisi", { ascending: true });
       if (error) throw error;
       setCustomerDb((data || []).map(customerFromDb));
+      setSyncMessage(`✅ ${data?.length || 0} Customer dimuat dari Supabase.`);
       alert(`${data?.length || 0} customer dimuat dari Supabase.`);
-    } catch (err) { alert(`Gagal memuat Supabase: ${err?.message || "kesalahan"}`); }
+    } catch (err) { setSyncMessage(`❌ Gagal memuat Customer: ${err?.message || "kesalahan"}`); alert(`Gagal memuat Supabase: ${err?.message || "kesalahan"}`); }
+    finally { setBusy(false); }
   };
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(customerDb, null, 2)], { type: "application/json" });
@@ -1163,17 +1206,18 @@ function MasterCustomer({customerDb,setCustomerDb}){
     } catch (err) { alert(`Customer lokal sudah kosong, tetapi Supabase gagal dihapus: ${err?.message || "kesalahan"}`); }
   };
   return <section style={styles.card}><h1>Master Customer</h1>
+    {syncMessage && <div style={{padding:10,marginBottom:10,borderRadius:6,background:syncMessage.startsWith("❌")?"#fee2e2":syncMessage.startsWith("✅")?"#dcfce7":"#dbeafe"}}>{syncMessage}</div>}
     <p><b>Format Excel:</b> POLICE_NO | MODEL | CUSTOMER | ADDRESS | RANGKA | TELEPHONE_CP. Nama kolom dibaca berdasarkan header, jadi plat tidak akan diambil dari belakang nomor rangka.</p>
     <input ref={excelInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={importExcel} style={{display:"none"}}/>
-    <button style={styles.green} onClick={()=>excelInputRef.current?.click()}>Upload Excel Customer</button>
-    <button style={styles.btn} onClick={refreshOnline}>Refresh dari Supabase</button>
+    <button style={styles.green} disabled={busy} onClick={()=>excelInputRef.current?.click()}>{busy ? "Memproses..." : "Upload Excel Customer"}</button>
+    <button style={styles.btn} disabled={busy} onClick={refreshOnline}>{busy ? "Memproses..." : "Refresh dari Supabase"}</button>
     <textarea value={bulk} onChange={(e)=>setBulk(e.target.value)} placeholder={'Bisa juga copy-paste dari Excel beserta header:\nPOLICE_NO\tMODEL\tCUSTOMER\tADDRESS\tRANGKA\tTELEPHONE_CP'} style={styles.bulkBox}/>
-    <button style={styles.green} onClick={importBulk}>Import Customer dari Paste</button>
-    <button style={styles.btn} onClick={saveOnline}>Simpan Semua Customer</button>
+    <button style={styles.green} disabled={busy} onClick={importBulk}>{busy ? "Memproses..." : "Import Customer dari Paste"}</button>
+    <button style={styles.btn} disabled={busy} onClick={saveOnline}>{busy ? "Memproses..." : "Simpan Semua Customer"}</button>
     <button style={styles.red} onClick={deleteAll}>Delete All Customer</button>
     <button style={styles.btn} onClick={exportJson}>Export Backup</button>
     <button style={styles.btn} onClick={()=>setCustomerDb([...customerDb,{polisi:"",kendaraan:"",customer:"",alamat:"",rangka:"",phone:""}])}>+ Add Customer</button>
-    <table style={styles.table}><thead><tr><th>Police No</th><th>Model</th><th>Customer</th><th>Alamat</th><th>No Rangka</th><th>No Telp</th><th>Act</th></tr></thead><tbody>{customerDb.map((c,i)=><tr key={c.id || `${norm(c.polisi)}-${i}`}>{["polisi","kendaraan","customer","alamat","rangka","phone"].map(k=><td key={k}><input value={c[k]||""} onChange={e=>setCustomerDb(customerDb.map((x,j)=>j===i?{...x,[k]:e.target.value}:x))} style={styles.cellInput}/></td>)}<td><button style={styles.del} onClick={()=>deleteOne(c,i)}>Hapus</button></td></tr>)}</tbody></table></section>
+    <table style={styles.table}><thead><tr><th>Police No</th><th>Model</th><th>Customer</th><th>Alamat</th><th>No Rangka</th><th>No Telp</th><th>Act</th></tr></thead><tbody>{customerDb.map((c,i)=><tr key={c.id || `${norm(c.polisi)}-${i}`}>{["polisi","kendaraan","customer","alamat","rangka","phone"].map(k=><td key={k}><input value={c[k]||""} onChange={e=>setCustomerDb(customerDb.map((x,j)=>j===i?{...x,[k]:e.target.value}:x))} onBlur={()=>saveCustomerOnline([c],"Customer otomatis tersimpan.",true)} style={styles.cellInput}/></td>)}<td><button style={styles.del} disabled={busy} onClick={()=>deleteOne(c,i)}>Hapus</button></td></tr>)}</tbody></table></section>
 }
 function PDFView({refx,form,totals}){
   const tanggal = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
