@@ -415,11 +415,11 @@ export default function App() {
   };
 
   const findCustomerByPlate = (plate) => {
-    const q = norm(plate);
+    const q = norm(plate).replace(/[^A-Z0-9]/g, "");
     if (!q) return;
     // Auto isi hanya kalau nomor polisi sudah sama persis.
     // Jadi saat baru ketik "DK" data tidak langsung berubah.
-    const found = customerDb.find((c) => norm(c.polisi) === q);
+    const found = customerDb.find((c) => norm(c.polisi).replace(/[^A-Z0-9]/g, "") === q);
     if (found) {
       setForm((p) => ({
         ...p,
@@ -615,13 +615,91 @@ export default function App() {
 
   const downloadPDF = async () => {
     await saveHistory();
-    const canvas = await html2canvas(pdfRef.current, { scale: 3, useCORS: true, scrollY: 0 });
-    const imgData = canvas.toDataURL("image/png");
-    const pdf = new jsPDF("p", "mm", "a4");
-    const imgWidth = 190;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-    pdf.addImage(imgData, "PNG", 10, 8, imgWidth, imgHeight);
-    pdf.save(`estimasi-${form.polisi || "baru"}.pdf`);
+    const element = pdfRef.current;
+    if (!element) return;
+    // Render a detached full-height copy so browser scroll/overflow cannot crop the PDF.
+    const holder = document.createElement("div");
+    Object.assign(holder.style, {
+      position: "fixed", left: "-10000px", top: "0", width: "900px",
+      height: "auto", overflow: "visible", zIndex: "-1", background: "white"
+    });
+    const copy = element.cloneNode(true);
+    Object.assign(copy.style, {
+      margin: "0", height: "auto", maxHeight: "none", overflow: "visible",
+      boxSizing: "border-box"
+    });
+    holder.appendChild(copy);
+    document.body.appendChild(holder);
+    try {
+      await document.fonts?.ready;
+      await Promise.all(Array.from(copy.querySelectorAll("img")).map(img =>
+        img.complete ? Promise.resolve() : new Promise(resolve => {
+          img.onload = resolve; img.onerror = resolve;
+        })
+      ));
+      const contentHeight = Math.ceil(Math.max(copy.scrollHeight, copy.getBoundingClientRect().height));
+      const canvas = await html2canvas(copy, {
+        scale: 2, useCORS: true, backgroundColor: "#ffffff",
+        width: copy.scrollWidth, height: contentHeight,
+        windowWidth: Math.max(1200, copy.scrollWidth),
+        windowHeight: Math.max(window.innerHeight, contentHeight),
+        scrollX: 0, scrollY: 0
+      });
+      const pdf = new jsPDF("p", "mm", "a4");
+      const marginX = 10, marginY = 8;
+      const imageWidth = pdf.internal.pageSize.getWidth() - marginX * 2;
+      const usableHeight = pdf.internal.pageSize.getHeight() - marginY * 2;
+      const pxPerMm = canvas.width / imageWidth;
+      const pageHeightPx = Math.floor(usableHeight * pxPerMm);
+      const ratio = canvas.height / contentHeight;
+      const rootRect = copy.getBoundingClientRect();
+      const pos = node => Math.round((node.getBoundingClientRect().bottom - rootRect.top) * ratio);
+      const topPos = node => Math.round((node.getBoundingClientRect().top - rootRect.top) * ratio);
+      const tables = Array.from(copy.querySelectorAll(".pdfCellTable"));
+      const safeBreaks = new Set([canvas.height]);
+      // A row must never be split between pages.
+      tables.forEach(table => {
+        safeBreaks.add(topPos(table));
+        table.querySelectorAll("tr").forEach(row => safeBreaks.add(pos(row)));
+        safeBreaks.add(pos(table));
+      });
+      // Total, notes, and signatures are an inseparable block on the final page.
+      const total = copy.querySelector(".pdfTotalRow");
+      const finalStart = total ? topPos(total) : canvas.height;
+      safeBreaks.add(finalStart);
+      const breaks = [...safeBreaks].filter(v => v > 0 && v <= canvas.height).sort((x,y) => x-y);
+      let top = 0;
+      while (top < canvas.height) {
+        const limit = Math.min(top + pageHeightPx, canvas.height);
+        let bottom = limit;
+        if (limit < canvas.height) {
+          // If final section begins in this page but cannot fit, move it whole.
+          if (finalStart > top && finalStart < limit && canvas.height - finalStart <= pageHeightPx) {
+            bottom = finalStart;
+          } else {
+            const candidates = breaks.filter(v => v > top && v <= limit && (v <= finalStart || top >= finalStart));
+            if (candidates.length) bottom = candidates[candidates.length - 1];
+          }
+        }
+        if (bottom <= top) bottom = limit;
+        const slice = document.createElement("canvas");
+        slice.width = canvas.width;
+        slice.height = bottom - top;
+        const ctx = slice.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, slice.width, slice.height);
+        ctx.drawImage(canvas, 0, top, canvas.width, slice.height, 0, 0, canvas.width, slice.height);
+        if (top > 0) pdf.addPage();
+        pdf.addImage(slice.toDataURL("image/png"), "PNG", marginX, marginY, imageWidth, slice.height / pxPerMm);
+        top = bottom;
+      }
+      pdf.save(`estimasi-${form.polisi || "baru"}.pdf`);
+    } catch (error) {
+      console.error("Gagal membuat PDF:", error);
+      alert("PDF gagal dibuat. Silakan coba lagi.");
+    } finally {
+      holder.remove();
+    }
   };
 
   const menuLabel = (icon, text) => <><span style={styles.menuIcon}>{icon}</span>{!sidebarMini && <span>{text}</span>}</>;
@@ -684,7 +762,7 @@ export default function App() {
   </div>;
 }
 
-function Estimasi(p){ const f=p.form; const customers = p.customerDb || []; return <><section style={styles.card}><h2 style={{textAlign:"center"}}>FORM ESTIMASI</h2><div style={styles.tabs}><b>Profile</b><b>Estimasi Biaya</b></div><h3>🚙 Informasi Kendaraan</h3><div style={styles.grid4}><SearchInput label="No Polisi *" value={f.polisi} suggestions={customers.map((c)=>({value:c.polisi||"",label:`${c.polisi || ""} - ${c.customer || ""} - ${c.kendaraan || ""}`}))} onChange={(v)=>{ const plat = String(v || "").toUpperCase(); p.setField("polisi", plat); p.findCustomerByPlate(plat); }} onSelect={(v)=>{ const plat = String(v || "").toUpperCase(); p.setField("polisi", plat); p.findCustomerByPlate(plat); }}/><SearchInput label="Type Kendaraan *" value={f.kendaraan} suggestions={[...new Set(customers.map(c=>c.kendaraan).filter(Boolean))].map((x)=>({value:x,label:x}))} onChange={(v)=>p.setField("kendaraan",v)} onSelect={(v)=>p.setField("kendaraan",v)}/><SearchInput label="No Rangka *" value={f.rangka} suggestions={customers.map((c)=>({value:c.rangka||"",label:`${c.rangka || ""} - ${c.polisi || ""} - ${c.customer || ""}`}))} onChange={(v)=>p.setField("rangka",v)} onSelect={(v)=>p.setField("rangka",v)}/><Input label="Tahun *" value={f.tahun} onChange={(v)=>p.setField("tahun",v)}/></div><h3>👤 Informasi Pelanggan</h3><div style={styles.grid2}><Input label="Nama Pelanggan *" value={f.customer} onChange={(v)=>p.setField("customer",v)}/><Input label="No Telepon" value={f.phone} onChange={(v)=>p.setField("phone",v)}/><Input label="Contact Person" value={f.contact} onChange={(v)=>p.setField("contact",v)}/><Input label="Alamat" value={f.alamat} onChange={(v)=>p.setField("alamat",v)}/></div><label style={{...styles.label,display:"block",marginTop:14}}>Catatan / Keterangan Tambahan<textarea value={f.catatan || ""} onChange={(e)=>p.setField("catatan",e.target.value)} style={styles.noteInput} placeholder="Ketik catatan yang ingin muncul di kolom kosong PDF..."/></label><h3>▣ Informasi Pembuat Estimasi</h3><div style={styles.grid3}><AdvisorSelect label="Nama Service Advisor *" value={f.staff} advisors={p.advisorDb || []} role="SA" onChange={(v)=>{p.setField("staff",v);p.pilihAdvisor(v)}}/><Input label="Jabatan" value={f.jabatan} onChange={(v)=>p.setField("jabatan",v)}/><AdvisorSelect label="Kepala Bengkel" value={f.kepalaBengkel} advisors={p.advisorDb || []} role="KABENG" onChange={(v)=>{p.setField("kepalaBengkel",v);p.pilihAdvisor(v)}}/></div></section>
+function Estimasi(p){ const f=p.form; const customers = p.customerDb || []; return <><section style={styles.card}><h2 style={{textAlign:"center"}}>FORM ESTIMASI</h2><div style={styles.tabs}><b>Profile</b><b>Estimasi Biaya</b></div><h3>🚙 Informasi Kendaraan</h3><div style={styles.grid4}><SearchInput label="No Polisi *" value={f.polisi} suggestions={customers.filter(c=>c.polisi).map((c)=>({value:c.polisi||"",label:`${c.polisi || ""} - ${c.customer || ""} - ${c.kendaraan || ""}`}))} matchPlateOnly onChange={(v)=>{ const plat = String(v || "").toUpperCase(); p.setField("polisi", plat); p.findCustomerByPlate(plat); }} onSelect={(v)=>{ const plat = String(v || "").toUpperCase(); p.setField("polisi", plat); p.findCustomerByPlate(plat); }}/><SearchInput label="Type Kendaraan *" value={f.kendaraan} suggestions={[...new Set(customers.map(c=>c.kendaraan).filter(Boolean))].map((x)=>({value:x,label:x}))} onChange={(v)=>p.setField("kendaraan",v)} onSelect={(v)=>p.setField("kendaraan",v)}/><SearchInput label="No Rangka *" value={f.rangka} suggestions={customers.map((c)=>({value:c.rangka||"",label:`${c.rangka || ""} - ${c.polisi || ""} - ${c.customer || ""}`}))} onChange={(v)=>p.setField("rangka",v)} onSelect={(v)=>p.setField("rangka",v)}/><Input label="Tahun *" value={f.tahun} onChange={(v)=>p.setField("tahun",v)}/></div><h3>👤 Informasi Pelanggan</h3><div style={styles.grid2}><Input label="Nama Pelanggan *" value={f.customer} onChange={(v)=>p.setField("customer",v)}/><Input label="No Telepon" value={f.phone} onChange={(v)=>p.setField("phone",v)}/><Input label="Contact Person" value={f.contact} onChange={(v)=>p.setField("contact",v)}/><Input label="Alamat" value={f.alamat} onChange={(v)=>p.setField("alamat",v)}/></div><label style={{...styles.label,display:"block",marginTop:14}}>Catatan / Keterangan Tambahan<textarea value={f.catatan || ""} onChange={(e)=>p.setField("catatan",e.target.value)} style={styles.noteInput} placeholder="Ketik catatan yang ingin muncul di kolom kosong PDF..."/></label><h3>▣ Informasi Pembuat Estimasi</h3><div style={styles.grid3}><AdvisorSelect label="Nama Service Advisor *" value={f.staff} advisors={p.advisorDb || []} role="SA" onChange={(v)=>{p.setField("staff",v);p.pilihAdvisor(v)}}/><Input label="Jabatan" value={f.jabatan} onChange={(v)=>p.setField("jabatan",v)}/><AdvisorSelect label="Kepala Bengkel" value={f.kepalaBengkel} advisors={p.advisorDb || []} role="KABENG" onChange={(v)=>{p.setField("kepalaBengkel",v);p.pilihAdvisor(v)}}/></div></section>
   <section style={styles.card}><h3>🔧 Estimasi Parts</h3><table style={styles.table}><thead><tr><th>FREE</th><th>PART NO</th><th>PART NAME</th><th>QTY</th><th>PRICE</th><th>TOTAL</th><th>ACT</th></tr></thead><tbody>{f.parts.map(r=><tr key={r.id}><td><input type="checkbox" checked={r.free} onChange={(e)=>p.updateRow("parts",r.id,"free",e.target.checked)}/></td><td><SearchCell value={r.partNo} suggestions={p.partDb.map(x=>({value:x.partNo,label:`${x.partNo} - ${x.partName} - Rp ${rupiah(x.price)}`}))} onChange={(v)=>p.updateRow("parts",r.id,"partNo",v)} onSelect={(v)=>p.updateRow("parts",r.id,"partNo",v)}/></td><td><SearchCell value={r.partName} suggestions={p.partDb.map(x=>({value:x.partName,label:`${x.partName} - ${x.partNo} - Rp ${rupiah(x.price)}`}))} onChange={(v)=>p.updateRow("parts",r.id,"partName",v)} onSelect={(v)=>p.updateRow("parts",r.id,"partName",v)}/></td><td><input type="number" value={r.qty} onChange={(e)=>p.updateRow("parts",r.id,"qty",e.target.value)} style={styles.smallInput}/></td><td><input value={r.price} onChange={(e)=>p.updateRow("parts",r.id,"price",toNumber(e.target.value))} style={styles.cellInput}/></td><td><b>{rupiah(r.total)}</b></td><td><button onClick={()=>p.deleteRow("parts",r.id)} style={styles.del}>🗑</button></td></tr>)}</tbody></table><button onClick={p.addPart} style={styles.btn}>⊕ Add Part</button><button onClick={()=>p.filePartRef.current.click()} style={styles.green}>♻ Add from Image / Paste Foto</button><input ref={p.filePartRef} type="file" accept="image/*" hidden onChange={(e)=>p.addPartsFromImage(e.target.files[0])}/><small style={{display:"block",marginTop:8}}>Tips: bisa juga copy gambar tabel part lalu klik area aplikasi dan tekan Ctrl+V.</small><hr/>
   <h3>🔨 Estimasi Sublet / Additional Job</h3><table style={styles.table}><thead><tr><th>FREE</th><th>KODE</th><th>NAMA SUBLET</th><th>QTY</th><th>PRICE</th><th>TOTAL</th><th>ACT</th></tr></thead><tbody>{f.sublets.map(r=><tr key={r.id}><td><input type="checkbox" checked={r.free || false} onChange={(e)=>p.updateRow("sublets",r.id,"free",e.target.checked)}/></td><td><SearchCell value={r.subletNo} suggestions={(p.subletDb || []).map(x=>({value:x.subletNo,label:`${x.subletNo} - ${x.subletName} - Rp ${rupiah(x.price)}`}))} onChange={(v)=>p.updateRow("sublets",r.id,"subletNo",v)} onSelect={(v)=>p.updateRow("sublets",r.id,"subletNo",v)}/></td><td><SearchCell value={r.subletName} suggestions={(p.subletDb || []).map(x=>({value:x.subletName,label:`${x.subletName} - ${x.subletNo} - Rp ${rupiah(x.price)}`}))} onChange={(v)=>p.updateRow("sublets",r.id,"subletName",v)} onSelect={(v)=>p.updateRow("sublets",r.id,"subletName",v)}/></td><td><input type="number" value={r.qty} onChange={(e)=>p.updateRow("sublets",r.id,"qty",e.target.value)} style={styles.smallInput}/></td><td><input value={r.price} onChange={(e)=>p.updateRow("sublets",r.id,"price",toNumber(e.target.value))} style={styles.cellInput}/></td><td><b>{rupiah(r.total)}</b></td><td><button onClick={()=>p.deleteRow("sublets",r.id)} style={styles.del}>🗑</button></td></tr>)}</tbody></table><button onClick={p.addSublet} style={styles.btn}>⊕ Add Sublet</button><hr/><h3>🧰 Jasa Pekerjaan</h3><div style={styles.flatRateBox}><b>Flat Rate</b><span>Pilih Type</span><select value={p.repairType || "Tidak Ada"} onChange={(e)=>p.handleFlatRateChange(e.target.value)} style={styles.select}>{Object.keys(p.flatRateDb || {}).map(x=><option key={x} value={x}>{x}</option>)}</select><span>Flat Rate</span><input readOnly value={rupiah((p.flatRateDb || {})[p.repairType] || 0)} style={styles.flatRateInput}/></div><EditableSimple rows={f.jasa} type="jasa" updateRow={p.updateRow} deleteRow={p.deleteRow} cols={["jasaName","rate","price"]} repairType={p.repairType}/><button onClick={p.addJasa} style={styles.btn}>⊕ Add Jasa</button><div style={styles.discount}><Input label="Disc Part (%)" value={f.discPartPct} onChange={(v)=>p.setField("discPartPct",v)}/><Input label="Disc Part (Rp)" value={f.discPartRp} onChange={(v)=>p.setField("discPartRp",toNumber(v))}/><Input label="Disc Jasa (%)" value={f.discJasaPct} onChange={(v)=>p.setField("discJasaPct",v)}/><Input label="Disc Jasa (Rp)" value={f.discJasaRp} onChange={(v)=>p.setField("discJasaRp",toNumber(v))}/><div style={styles.totalBox}><p>Total Parts<br/><b>Rp {rupiah(p.totals.totalParts)}</b></p><p>Total Sublet<br/><b>Rp {rupiah(p.totals.totalSublet)}</b></p><p>Total Jasa<br/><b>Rp {rupiah(p.totals.totalJasa)}</b></p><b>Grand Total</b><h2>Rp {rupiah(p.totals.grandTotal)}</h2></div></div><div style={styles.actions}><button onClick={p.resetForm} style={styles.red}>↻ Reset</button><button onClick={p.updateHargaSpareJasa} style={styles.btn}>↻ Update Harga Spare & Jasa</button><button onClick={p.saveMasterFromCurrent} style={styles.btn}>💾 Save Master</button><button onClick={p.saveHistory} style={styles.green}>Submit / Save History</button><button onClick={p.downloadPDF} style={styles.blue}>Submit & Create PDF</button></div></section><PDFView refx={p.pdfRef} form={f} totals={p.totals}/></> }
 
@@ -705,10 +783,11 @@ function AdvisorSelect({label,value,advisors=[],role,onChange}){
   </select><small style={{display:"block",marginTop:5,color:"#666"}}>{items.length} nama aktif tersedia dari Master Advisor.</small></label>
 }
 
-function SearchInput({label,value,onChange,onSelect,suggestions=[]}){
+function SearchInput({label,value,onChange,onSelect,suggestions=[],matchPlateOnly=false}){
   const [open,setOpen]=useState(false);
   const q=norm(value);
-  const items=(suggestions||[]).filter(x=>norm(x.value).includes(q)||norm(x.label).includes(q)).slice(0,30);
+  const plateKey = (v) => norm(v).replace(/[^A-Z0-9]/g, "");
+  const items=(suggestions||[]).filter(x=>matchPlateOnly ? (plateKey(value).length>0 && plateKey(x.value).includes(plateKey(value))) : (norm(x.value).includes(q)||norm(x.label).includes(q))).slice(0,30);
   return <label style={{...styles.label,position:"relative",display:"block"}}>{label}<input value={value||""} onChange={(e)=>{onChange(e.target.value);setOpen(true)}} onFocus={()=>setOpen(true)} onBlur={()=>setTimeout(()=>setOpen(false),180)} style={styles.input}/>{open&&items.length>0&&<div style={styles.suggestBox}>{items.map((x,i)=><div key={(x.value||"")+i} onMouseDown={(e)=>{e.preventDefault();onSelect?onSelect(x.value):onChange(x.value);setOpen(false)}} style={styles.suggestItem}>{x.label||x.value}</div>)}</div>}</label>
 }
 function SearchCell({value,onChange,onSelect,suggestions=[]}){
