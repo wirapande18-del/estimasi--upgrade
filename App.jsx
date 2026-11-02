@@ -617,59 +617,89 @@ export default function App() {
     await saveHistory();
     const element = pdfRef.current;
     if (!element) return;
-    // Capture the entire document; jsPDF does not paginate a tall image automatically.
-    const canvas = await html2canvas(element, {
-      scale: 2, useCORS: true, scrollY: -window.scrollY,
-      windowWidth: Math.max(document.documentElement.clientWidth, element.scrollWidth),
-      height: element.scrollHeight
+    // Render a detached full-height copy so browser scroll/overflow cannot crop the PDF.
+    const holder = document.createElement("div");
+    Object.assign(holder.style, {
+      position: "fixed", left: "-10000px", top: "0", width: "900px",
+      height: "auto", overflow: "visible", zIndex: "-1", background: "white"
     });
-    const pdf = new jsPDF("p", "mm", "a4");
-    const marginX = 10;
-    const marginY = 8;
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const imageWidth = pageWidth - 2 * marginX;
-    const usableHeight = pageHeight - 2 * marginY;
-    const pxPerMm = canvas.width / imageWidth;
-    const pageHeightPx = Math.floor(usableHeight * pxPerMm);
-    const ratio = canvas.height / Math.max(element.scrollHeight, 1);
-
-    // Avoid cutting through table rows, headings, totals, and signature blocks.
-    const boundaryNodes = element.querySelectorAll(
-      ".pdfCellTable tr, .pdfCellTable, .pdfCellTable thead, .pdfCellTable tbody, .pdfCellTable + *, .pdfCellTable ~ div, .pdfCellTable ~ p"
-    );
-    const rootRect = element.getBoundingClientRect();
-    const safeBreaks = new Set([canvas.height]);
-    boundaryNodes.forEach((node) => {
-      if (node === element) return;
-      const rect = node.getBoundingClientRect();
-      const bottom = Math.round((rect.bottom - rootRect.top) * ratio);
-      if (bottom > 0 && bottom <= canvas.height) safeBreaks.add(bottom);
+    const copy = element.cloneNode(true);
+    Object.assign(copy.style, {
+      margin: "0", height: "auto", maxHeight: "none", overflow: "visible",
+      boxSizing: "border-box"
     });
-    const breaks = [...safeBreaks].sort((a, b) => a - b);
-    let top = 0;
-    let page = 0;
-    while (top < canvas.height) {
-      const limit = Math.min(top + pageHeightPx, canvas.height);
-      let bottom = limit;
-      if (limit < canvas.height) {
-        const candidates = breaks.filter((y) => y > top + pageHeightPx * 0.55 && y <= limit);
-        if (candidates.length) bottom = candidates[candidates.length - 1];
+    holder.appendChild(copy);
+    document.body.appendChild(holder);
+    try {
+      await document.fonts?.ready;
+      await Promise.all(Array.from(copy.querySelectorAll("img")).map(img =>
+        img.complete ? Promise.resolve() : new Promise(resolve => {
+          img.onload = resolve; img.onerror = resolve;
+        })
+      ));
+      const contentHeight = Math.ceil(Math.max(copy.scrollHeight, copy.getBoundingClientRect().height));
+      const canvas = await html2canvas(copy, {
+        scale: 2, useCORS: true, backgroundColor: "#ffffff",
+        width: copy.scrollWidth, height: contentHeight,
+        windowWidth: Math.max(1200, copy.scrollWidth),
+        windowHeight: Math.max(window.innerHeight, contentHeight),
+        scrollX: 0, scrollY: 0
+      });
+      const pdf = new jsPDF("p", "mm", "a4");
+      const marginX = 10, marginY = 8;
+      const imageWidth = pdf.internal.pageSize.getWidth() - marginX * 2;
+      const usableHeight = pdf.internal.pageSize.getHeight() - marginY * 2;
+      const pxPerMm = canvas.width / imageWidth;
+      const pageHeightPx = Math.floor(usableHeight * pxPerMm);
+      const ratio = canvas.height / contentHeight;
+      const rootRect = copy.getBoundingClientRect();
+      const pos = node => Math.round((node.getBoundingClientRect().bottom - rootRect.top) * ratio);
+      const topPos = node => Math.round((node.getBoundingClientRect().top - rootRect.top) * ratio);
+      const tables = Array.from(copy.querySelectorAll(".pdfCellTable"));
+      const safeBreaks = new Set([canvas.height]);
+      // A row must never be split between pages.
+      tables.forEach(table => {
+        safeBreaks.add(topPos(table));
+        table.querySelectorAll("tr").forEach(row => safeBreaks.add(pos(row)));
+        safeBreaks.add(pos(table));
+      });
+      // Total, notes, and signatures are an inseparable block on the final page.
+      const total = copy.querySelector(".pdfTotalRow");
+      const finalStart = total ? topPos(total) : canvas.height;
+      safeBreaks.add(finalStart);
+      const breaks = [...safeBreaks].filter(v => v > 0 && v <= canvas.height).sort((x,y) => x-y);
+      let top = 0;
+      while (top < canvas.height) {
+        const limit = Math.min(top + pageHeightPx, canvas.height);
+        let bottom = limit;
+        if (limit < canvas.height) {
+          // If final section begins in this page but cannot fit, move it whole.
+          if (finalStart > top && finalStart < limit && canvas.height - finalStart <= pageHeightPx) {
+            bottom = finalStart;
+          } else {
+            const candidates = breaks.filter(v => v > top && v <= limit && (v <= finalStart || top >= finalStart));
+            if (candidates.length) bottom = candidates[candidates.length - 1];
+          }
+        }
+        if (bottom <= top) bottom = limit;
+        const slice = document.createElement("canvas");
+        slice.width = canvas.width;
+        slice.height = bottom - top;
+        const ctx = slice.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, slice.width, slice.height);
+        ctx.drawImage(canvas, 0, top, canvas.width, slice.height, 0, 0, canvas.width, slice.height);
+        if (top > 0) pdf.addPage();
+        pdf.addImage(slice.toDataURL("image/png"), "PNG", marginX, marginY, imageWidth, slice.height / pxPerMm);
+        top = bottom;
       }
-      if (bottom <= top) bottom = limit;
-      const slice = document.createElement("canvas");
-      slice.width = canvas.width;
-      slice.height = bottom - top;
-      const ctx = slice.getContext("2d");
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, slice.width, slice.height);
-      ctx.drawImage(canvas, 0, top, canvas.width, slice.height, 0, 0, canvas.width, slice.height);
-      if (page > 0) pdf.addPage();
-      pdf.addImage(slice.toDataURL("image/png"), "PNG", marginX, marginY, imageWidth, slice.height / pxPerMm);
-      top = bottom;
-      page += 1;
+      pdf.save(`estimasi-${form.polisi || "baru"}.pdf`);
+    } catch (error) {
+      console.error("Gagal membuat PDF:", error);
+      alert("PDF gagal dibuat. Silakan coba lagi.");
+    } finally {
+      holder.remove();
     }
-    pdf.save(`estimasi-${form.polisi || "baru"}.pdf`);
   };
 
   const menuLabel = (icon, text) => <><span style={styles.menuIcon}>{icon}</span>{!sidebarMini && <span>{text}</span>}</>;
