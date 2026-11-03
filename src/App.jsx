@@ -658,10 +658,12 @@ export default function App() {
         const canvas = await html2canvas(pdfRef.current, { scale: 2, useCORS: true, scrollY: 0, backgroundColor: "#ffffff" });
         const pdf = new jsPDF("p", "mm", "a4");
         const pageWidth = 190;
-        const pageBottom = 9;
+        // Sisakan ruang untuk footer nomor halaman agar tidak menempel pada isi.
+        const pageBottom = 18;
         let sourceY = 0;
-        let pageIndex = 0;
+        const pageSlices = [];
         while (sourceY < canvas.height) {
+          const pageIndex = pageSlices.length;
           const topMargin = pageIndex === 0 ? 8 : 19;
           const maxSlice = Math.floor(((297 - topMargin - pageBottom) * canvas.width) / pageWidth);
           let sliceHeight = Math.min(maxSlice, canvas.height - sourceY);
@@ -681,10 +683,14 @@ export default function App() {
             if (bestOffset > 0) sliceHeight = bestOffset;
           }
           if (sliceHeight < 1) sliceHeight = Math.min(maxSlice, canvas.height - sourceY);
+          pageSlices.push({ sourceY, sliceHeight, topMargin });
+          sourceY += sliceHeight;
+        }
+        pageSlices.forEach(({ sourceY: pageSourceY, sliceHeight, topMargin }, pageIndex) => {
           const pageCanvas = document.createElement("canvas");
           pageCanvas.width = canvas.width;
           pageCanvas.height = sliceHeight;
-          pageCanvas.getContext("2d").drawImage(canvas, 0, sourceY, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight);
+          pageCanvas.getContext("2d").drawImage(canvas, 0, pageSourceY, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight);
           if (pageIndex > 0) pdf.addPage();
           const imageData = pageCanvas.toDataURL("image/jpeg", 0.94);
           const imageHeight = (sliceHeight * pageWidth) / canvas.width;
@@ -694,9 +700,11 @@ export default function App() {
             pdf.setTextColor(70);
             pdf.text(`LANJUTAN ESTIMASI  •  No. Polisi: ${pdfTarget.form.polisi || "-"}  •  No. Estimasi: ${pdfTarget.form.noEstimasi || "-"}`, 10, 14);
           }
-          sourceY += sliceHeight;
-          pageIndex++;
-        }
+          pdf.setFontSize(8);
+          pdf.setTextColor(90);
+          pdf.text(`No. Polisi: ${pdfTarget.form.polisi || "-"}  •  No. Estimasi: ${pdfTarget.form.noEstimasi || "-"}`, 10, 289);
+          pdf.text(`Halaman ${pageIndex + 1} dari ${pageSlices.length}`, 200, 289, { align: "right" });
+        });
         if (!cancelled) pdf.save(pdfTarget.fileName);
       } catch (error) {
         console.error("Gagal membuat PDF estimasi:", error);
@@ -818,8 +826,16 @@ function Input({label,value,onChange,list}){return <label style={styles.label}>{
 function History({history,editHistory,setHistory,downloadPDF,newForm}){
   const [q, setQ] = useState("");
   const key = normalizeSearch(q);
+  // Saat input menyerupai nomor polisi, cocokkan hanya dengan kolom plat.
+  // Dengan begitu pencarian DK-71-P tidak ikut menemukan data lain karena
+  // teks pelanggan/alamat/keterangan yang kebetulan mengandung karakter sama.
+  const isPlateSearch = /^[A-Z]{1,2}[0-9]{1,4}[A-Z]{0,3}$/.test(key);
   const filtered = !key ? history : history.filter((h) => {
     const data = h.data || {};
+    if (isPlateSearch) {
+      const plates = [h.polisi, h.noPolisi, h.no_polisi, data.polisi, data.noPolisi, data.no_polisi];
+      return plates.some((plate) => normalizeSearch(plate) === key);
+    }
     const fields = [
       h.polisi, h.noPolisi, h.no_polisi, data.polisi, data.noPolisi, data.no_polisi,
       h.customer, data.customer, h.kendaraan, data.kendaraan, h.rangka, data.rangka,
