@@ -718,9 +718,10 @@ export default function App() {
           pageCanvas.height = sliceHeight;
           pageCanvas.getContext("2d").drawImage(canvas, 0, pageSourceY, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight);
           if (pageIndex > 0) pdf.addPage();
-          const imageData = pageCanvas.toDataURL("image/jpeg", 0.94);
+          // PNG keeps thin table borders and small text crisp in the exported PDF.
+          const imageData = pageCanvas.toDataURL("image/png");
           const imageHeight = (sliceHeight * pageWidth) / canvas.width;
-          pdf.addImage(imageData, "JPEG", 10, topMargin, pageWidth, imageHeight, undefined, "FAST");
+          pdf.addImage(imageData, "PNG", 10, topMargin, pageWidth, imageHeight, undefined, "FAST");
           if (pageIndex > 0) {
             pdf.setFontSize(8);
             pdf.setTextColor(70);
