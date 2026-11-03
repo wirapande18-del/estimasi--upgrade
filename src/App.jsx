@@ -663,14 +663,15 @@ export default function App() {
           scrollY: 0,
           backgroundColor: "#ffffff",
           onclone: (clonedDoc) => {
-            const exportStyle = clonedDoc.createElement("style");
-            exportStyle.textContent = `
-              .pdfCellTable th,.pdfCellTable td{border-width:.2px!important}
-              .pdfCellTable{outline-width:.25px!important}
-              .pdfNew,.pdfNew *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
-              .pdfNew{-webkit-text-stroke:.08px currentColor}
-            `;
-            clonedDoc.head.appendChild(exportStyle);
+            const exportRoot = clonedDoc.querySelector('[data-pdf-export-root="true"]');
+            if (!exportRoot) return;
+            exportRoot.style.setProperty("-webkit-text-stroke", ".12px currentColor", "important");
+            exportRoot.querySelectorAll(".pdfCellTable").forEach((table) => {
+              table.style.setProperty("outline", ".12px solid #777", "important");
+              table.querySelectorAll("th,td").forEach((cell) => {
+                cell.style.setProperty("border-width", ".12px", "important");
+              });
+            });
           },
         });
         const canvasScale = canvas.width / rootRect.width;
@@ -1424,7 +1425,7 @@ function PDFView({refx,form,totals}){
   const totalJasaTampil = totals.totalJasaAfterDisc ?? totals.totalJasa;
   const noEstimasi = form.noEstimasi || `EST-${new Date().toISOString().slice(0,10).replace(/-/g,"")}`;
 
-  return <div ref={refx} style={styles.pdfNew}>
+  return <div ref={refx} data-pdf-export-root={refx ? "true" : undefined} style={styles.pdfNew}>
     <style>{`.pdfCellTable{outline:.5px solid #666;outline-offset:-1px}.pdfCellTable th,.pdfCellTable td{border:.4px solid #777;padding:4px 6px;vertical-align:middle;line-height:1.2}.pdfCellTable th{font-weight:800;text-align:center;background:#edf3e8;font-size:11.2px}.pdfCellTable td{text-align:center}.pdfCellTable .left{text-align:left}.pdfCellTable .centerLabel{text-align:center!important}`}</style>
     <div style={styles.pdfHeaderBar}>
       <div>
