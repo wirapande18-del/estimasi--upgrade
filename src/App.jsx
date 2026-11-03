@@ -655,7 +655,25 @@ export default function App() {
       try {
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         if (cancelled || !pdfRef.current) return;
-        const canvas = await html2canvas(pdfRef.current, { scale: 2, useCORS: true, scrollY: 0, backgroundColor: "#ffffff" });
+        const pdfRoot = pdfRef.current;
+        const rootRect = pdfRoot.getBoundingClientRect();
+        const canvas = await html2canvas(pdfRoot, { scale: 2, useCORS: true, scrollY: 0, backgroundColor: "#ffffff" });
+        const canvasScale = canvas.width / rootRect.width;
+        // Jaga agar judul kolom PDF tidak tertinggal sendirian di akhir halaman.
+        // Setiap tabel dipotong sebelum header jika satu baris isi pertamanya tidak muat.
+        const tableHeaderGroups = [...pdfRoot.querySelectorAll(".pdfCellTable")]
+          .map((table) => {
+            const header = table.querySelector("thead");
+            const firstRow = table.querySelector("tbody tr");
+            if (!header || !firstRow) return null;
+            const headerRect = header.getBoundingClientRect();
+            const firstRowRect = firstRow.getBoundingClientRect();
+            return {
+              top: (headerRect.top - rootRect.top) * canvasScale,
+              bottom: (firstRowRect.bottom - rootRect.top) * canvasScale,
+            };
+          })
+          .filter(Boolean);
         const pdf = new jsPDF("p", "mm", "a4");
         const pageWidth = 190;
         // Sisakan ruang untuk footer nomor halaman agar tidak menempel pada isi.
@@ -681,6 +699,14 @@ export default function App() {
               if (ink < bestInk) { bestInk = ink; bestOffset = scanStart + row; }
             }
             if (bestOffset > 0) sliceHeight = bestOffset;
+          }
+          const proposedBoundary = sourceY + sliceHeight;
+          const splitHeaderGroup = tableHeaderGroups.find(({ top, bottom }) =>
+            proposedBoundary > top + 1 && proposedBoundary < bottom - 1
+          );
+          if (splitHeaderGroup) {
+            const moveBeforeHeader = Math.floor(splitHeaderGroup.top - sourceY - 2);
+            if (moveBeforeHeader > 0) sliceHeight = moveBeforeHeader;
           }
           if (sliceHeight < 1) sliceHeight = Math.min(maxSlice, canvas.height - sourceY);
           pageSlices.push({ sourceY, sliceHeight, topMargin });
