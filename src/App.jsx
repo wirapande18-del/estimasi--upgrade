@@ -1413,7 +1413,7 @@ function PDFView({refx,form,totals}){
   const noEstimasi = form.noEstimasi || `EST-${new Date().toISOString().slice(0,10).replace(/-/g,"")}`;
 
   return <div ref={refx} style={styles.pdfNew}>
-    <style>{`.pdfCellTable th,.pdfCellTable td{border:1px solid #222;padding:4px 6px;vertical-align:middle;line-height:1.2}.pdfCellTable th{font-weight:800;text-align:center;background:#edf3e8;font-size:11.2px}.pdfCellTable td{text-align:center}.pdfCellTable .left{text-align:left}`}</style>
+    <style>{`.pdfCellTable{outline:1px solid #555;outline-offset:-1px}.pdfCellTable th,.pdfCellTable td{border:.65px solid #777;padding:4px 6px;vertical-align:middle;line-height:1.2}.pdfCellTable th{font-weight:800;text-align:center;background:#edf3e8;font-size:11.2px}.pdfCellTable td{text-align:center}.pdfCellTable .left{text-align:left}`}</style>
     <div style={styles.pdfHeaderBar}>
       <div>
         <h1 style={styles.pdfBranch}>PT. AGUNG AUTOMALL GIANYAR</h1>
