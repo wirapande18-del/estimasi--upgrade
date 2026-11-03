@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 import Tesseract from "tesseract.js";
 import * as XLSX from "xlsx";
 import { supabase, isSupabaseConfigured } from "./lib/supabase";
@@ -654,50 +656,94 @@ export default function App() {
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         if (cancelled || !pdfRef.current) return;
         const pdfRoot = pdfRef.current;
-        await Promise.all([...pdfRoot.querySelectorAll("img")].map((img) => {
-          if (img.complete) return Promise.resolve();
-          return new Promise((resolve) => {
-            img.addEventListener("load", resolve, { once: true });
-            img.addEventListener("error", resolve, { once: true });
-          });
-        }));
-        if (cancelled) return;
-        const printStyle = document.createElement("style");
-        const footerLeft = JSON.stringify(`No. Polisi: ${pdfTarget.form.polisi || "-"}  •  No. Estimasi: ${pdfTarget.form.noEstimasi || "-"}`);
-        const continuation = JSON.stringify(`LANJUTAN ESTIMASI  •  No. Polisi: ${pdfTarget.form.polisi || "-"}  •  No. Estimasi: ${pdfTarget.form.noEstimasi || "-"}`);
-        printStyle.textContent = `
-          @page {
-            size: A4 portrait;
-            margin: 19mm 10mm 18mm;
-            @top-left { content: ${continuation}; font: 8pt Arial, sans-serif; color: #464646; }
-            @bottom-left { content: ${footerLeft}; font: 8pt Arial, sans-serif; color: #5a5a5a; }
-            @bottom-right { content: "Halaman " counter(page) " dari " counter(pages); font: 8pt Arial, sans-serif; color: #5a5a5a; }
+        const rootRect = pdfRoot.getBoundingClientRect();
+        const canvas = await html2canvas(pdfRoot, {
+          scale: 3,
+          useCORS: true,
+          scrollY: 0,
+          backgroundColor: "#ffffff",
+          onclone: (clonedDoc) => {
+            const exportStyle = clonedDoc.createElement("style");
+            exportStyle.textContent = `
+              .pdfCellTable th,.pdfCellTable td{border-width:.2px!important}
+              .pdfCellTable{outline-width:.25px!important}
+              .pdfNew,.pdfNew *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+              .pdfNew{-webkit-text-stroke:.08px currentColor}
+            `;
+            clonedDoc.head.appendChild(exportStyle);
+          },
+        });
+        const canvasScale = canvas.width / rootRect.width;
+        const tableHeaderGroups = [...pdfRoot.querySelectorAll(".pdfCellTable")]
+          .map((table) => {
+            const header = table.querySelector("thead");
+            const firstRow = table.querySelector("tbody tr");
+            if (!header || !firstRow) return null;
+            const headerRect = header.getBoundingClientRect();
+            const firstRowRect = firstRow.getBoundingClientRect();
+            return {
+              top: (headerRect.top - rootRect.top) * canvasScale,
+              bottom: (firstRowRect.bottom - rootRect.top) * canvasScale,
+            };
+          })
+          .filter(Boolean);
+        const pdf = new jsPDF("p", "mm", "a4");
+        const pageWidth = 190;
+        const pageBottom = 18;
+        let sourceY = 0;
+        const pageSlices = [];
+        while (sourceY < canvas.height) {
+          const pageIndex = pageSlices.length;
+          const topMargin = pageIndex === 0 ? 8 : 19;
+          const maxSlice = Math.floor(((297 - topMargin - pageBottom) * canvas.width) / pageWidth);
+          let sliceHeight = Math.min(maxSlice, canvas.height - sourceY);
+          if (sourceY + sliceHeight < canvas.height && sliceHeight > 100) {
+            const scanStart = Math.max(0, sliceHeight - 100);
+            const scan = canvas.getContext("2d").getImageData(0, sourceY + scanStart, canvas.width, sliceHeight - scanStart);
+            let bestOffset = sliceHeight;
+            let bestInk = Infinity;
+            for (let row = 0; row < scan.height; row += 2) {
+              let ink = 0;
+              for (let x = 0; x < scan.width; x += 8) {
+                const pixel = (row * scan.width + x) * 4;
+                if (scan.data[pixel] < 235 || scan.data[pixel + 1] < 235 || scan.data[pixel + 2] < 235) ink++;
+              }
+              if (ink < bestInk) { bestInk = ink; bestOffset = scanStart + row; }
+            }
+            if (bestOffset > 0) sliceHeight = bestOffset;
           }
-          @page:first {
-            margin-top: 8mm;
-            @top-left { content: ""; }
+          const proposedBoundary = sourceY + sliceHeight;
+          const splitHeaderGroup = tableHeaderGroups.find(({ top, bottom }) =>
+            proposedBoundary > top + 1 && proposedBoundary < bottom - 1
+          );
+          if (splitHeaderGroup) {
+            const moveBeforeHeader = Math.floor(splitHeaderGroup.top - sourceY - 2);
+            if (moveBeforeHeader > 0) sliceHeight = moveBeforeHeader;
           }
-          @media print {
-            html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
-            body * { visibility: hidden !important; }
-            #pdf-export-shell, #pdf-export-shell * { visibility: visible !important; }
-            #pdf-export-shell { position: absolute !important; left: 0 !important; top: 0 !important; z-index: auto !important; width: 872px !important; height: auto !important; pointer-events: auto !important; }
-            #pdf-export-shell .pdfNew { width: 820px !important; padding: 20px 26px !important; margin: 0 !important; zoom: .82 !important; box-sizing: content-box !important; }
-            #pdf-export-shell .pdfCellTable { break-inside: auto; }
-            #pdf-export-shell .pdfCellTable thead { display: table-header-group; }
-            #pdf-export-shell .pdfCellTable tr { break-inside: avoid; }
-          }
-        `;
-        document.head.appendChild(printStyle);
-        const previousTitle = document.title;
-        document.title = pdfTarget.fileName.replace(/\.pdf$/i, "");
-        try {
-          window.print();
-        } finally {
-          printStyle.remove();
-          document.title = previousTitle;
-          if (!cancelled) setPdfTarget(null);
+          if (sliceHeight < 1) sliceHeight = Math.min(maxSlice, canvas.height - sourceY);
+          pageSlices.push({ sourceY, sliceHeight, topMargin });
+          sourceY += sliceHeight;
         }
+        pageSlices.forEach(({ sourceY: pageSourceY, sliceHeight, topMargin }, pageIndex) => {
+          const pageCanvas = document.createElement("canvas");
+          pageCanvas.width = canvas.width;
+          pageCanvas.height = sliceHeight;
+          pageCanvas.getContext("2d").drawImage(canvas, 0, pageSourceY, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight);
+          if (pageIndex > 0) pdf.addPage();
+          const imageData = pageCanvas.toDataURL("image/png");
+          const imageHeight = (sliceHeight * pageWidth) / canvas.width;
+          pdf.addImage(imageData, "PNG", 10, topMargin, pageWidth, imageHeight, undefined, "FAST");
+          if (pageIndex > 0) {
+            pdf.setFontSize(8);
+            pdf.setTextColor(70);
+            pdf.text(`LANJUTAN ESTIMASI  •  No. Polisi: ${pdfTarget.form.polisi || "-"}  •  No. Estimasi: ${pdfTarget.form.noEstimasi || "-"}`, 10, 14);
+          }
+          pdf.setFontSize(8);
+          pdf.setTextColor(90);
+          pdf.text(`No. Polisi: ${pdfTarget.form.polisi || "-"}  •  No. Estimasi: ${pdfTarget.form.noEstimasi || "-"}`, 10, 289);
+          pdf.text(`Halaman ${pageIndex + 1} dari ${pageSlices.length}`, 200, 289, { align: "right" });
+        });
+        if (!cancelled) pdf.save(pdfTarget.fileName);
       } catch (error) {
         console.error("Gagal membuat PDF estimasi:", error);
         if (!cancelled) alert("PDF belum berhasil dibuat. Silakan coba lagi.");
@@ -766,7 +812,7 @@ export default function App() {
       </div>}
     </aside>
     <main style={styles.main}><div style={{...styles.syncBar, background:isSupabaseConfigured ? "#e8f7ee" : "#fff4d6", color:isSupabaseConfigured ? "#176b3a" : "#8a5a00"}}><b>{isSupabaseConfigured ? "☁" : "💾"} {syncStatus}</b><span>{isSupabaseConfigured ? "Data lokal tetap menjadi cadangan otomatis." : "Isi file .env agar tersimpan online di Supabase."}</span></div>{page==="estimasi" && <Estimasi form={form} setField={setField} addPart={addPart} updateRow={updateRow} deleteRow={deleteRow} addSublet={addSublet} addJasa={addJasa} totals={totals} repairType={repairType} setRepairType={setRepairType} handleFlatRateChange={handleFlatRateChange} flatRateDb={flatRateDb} partDb={partDb} subletDb={subletDb} advisorDb={advisorDb} pilihAdvisor={pilihAdvisor} customerDb={customerDb} findCustomerByPlate={findCustomerByPlate} saveMasterFromCurrent={saveMasterFromCurrent} saveHistory={saveHistory} updateHargaSpareJasa={updateHargaSpareJasa} downloadPDF={downloadPDF} openPreview={openPreview} resetForm={resetForm} filePartRef={filePartRef} addPartsFromImage={addPartsFromImage}/>} {page==="history" && <History history={history} editHistory={editHistory} setHistory={setHistory} downloadPDF={downloadPDF} newForm={() => {resetForm(); setPage("estimasi")}}/>} {page==="sparepart" && <MasterPart partDb={partDb} setPartDb={setPartDb}/>} {page==="sublet" && <MasterSublet subletDb={subletDb} setSubletDb={setSubletDb}/>} {page==="jasa" && <MasterJasa flatRateDb={flatRateDb} setFlatRateDb={setFlatRateDb} setSyncStatus={setSyncStatus}/>} {page==="advisor" && <MasterAdvisor advisorDb={advisorDb} setAdvisorDb={setAdvisorDb}/>} {page==="customer" && <MasterCustomer customerDb={customerDb} setCustomerDb={setCustomerDb}/>}
-      <div id="pdf-export-shell" aria-hidden="true" style={{position:"fixed",left:"-20000px",top:0,zIndex:-1,pointerEvents:"none"}}>
+      <div aria-hidden="true" style={{position:"fixed",left:"-20000px",top:0,zIndex:-1,pointerEvents:"none"}}>
         <PDFView refx={pdfRef} form={pdfTarget?.form || form} totals={pdfTarget?.totals || totals}/>
       </div>
       {previewData && <div role="presentation" onClick={()=>setPreviewData(null)} style={styles.previewOverlay}>
