@@ -657,7 +657,17 @@ export default function App() {
         if (cancelled || !pdfRef.current) return;
         const pdfRoot = pdfRef.current;
         const rootRect = pdfRoot.getBoundingClientRect();
-        const canvas = await html2canvas(pdfRoot, { scale: 2, useCORS: true, scrollY: 0, backgroundColor: "#ffffff" });
+        const canvas = await html2canvas(pdfRoot, {
+          scale: 2,
+          useCORS: true,
+          scrollY: 0,
+          backgroundColor: "#ffffff",
+          onclone: (clonedDoc) => {
+            const exportStyle = clonedDoc.createElement("style");
+            exportStyle.textContent = ".pdfCellTable th,.pdfCellTable td{border-width:.2px!important}.pdfCellTable{outline-width:.25px!important}";
+            clonedDoc.head.appendChild(exportStyle);
+          },
+        });
         const canvasScale = canvas.width / rootRect.width;
         // Jaga agar judul kolom PDF tidak tertinggal sendirian di akhir halaman.
         // Setiap tabel dipotong sebelum header jika satu baris isi pertamanya tidak muat.
