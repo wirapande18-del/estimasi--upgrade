@@ -1452,13 +1452,13 @@ function PDFView({refx,form,totals}){
     </table>
 
     <table className="pdfCellTable" style={styles.pdfTableNew}>
-      <colgroup><col style={{width:"8%"}}/><col style={{width:"40%"}}/><col style={{width:"16%"}}/><col style={{width:"18%"}}/><col style={{width:"18%"}}/></colgroup>
+      <colgroup><col style={{width:"7%"}}/><col style={{width:"50%"}}/><col style={{width:"8%"}}/><col style={{width:"17%"}}/><col style={{width:"18%"}}/></colgroup>
       <thead><tr><th>No.</th><th>Sublet</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
       <tbody>{subletsChargeable.length ? subletsChargeable.map((r,i)=><tr key={r.id||i}><td>{i+1}</td><td className="left">{r.subletName}</td><td>{r.qty}</td><td>Rp {rupiah(r.price)}</td><td>Rp {rupiah(r.total)}</td></tr>) : <tr><td colSpan="5">-</td></tr>}</tbody>
     </table>
 
     <table className="pdfCellTable" style={styles.pdfTableNew}>
-      <colgroup><col style={{width:"8%"}}/><col style={{width:"40%"}}/><col style={{width:"16%"}}/><col style={{width:"18%"}}/><col style={{width:"18%"}}/></colgroup>
+      <colgroup><col style={{width:"7%"}}/><col style={{width:"50%"}}/><col style={{width:"8%"}}/><col style={{width:"17%"}}/><col style={{width:"18%"}}/></colgroup>
       <thead><tr><th>No.</th><th>Jasa Pekerjaan</th><th>Rate</th><th>Price</th><th>Total</th></tr></thead>
       <tbody>{jasaChargeable.length ? jasaChargeable.map((r,i)=><tr key={r.id||i}><td>{i+1}</td><td className="left">{r.jasaName}</td><td>{r.rate}</td><td>Rp {rupiah(r.price)}</td><td>Rp {rupiah(r.total)}</td></tr>) : <tr><td colSpan="5">-</td></tr>}</tbody>
     </table>
