@@ -663,15 +663,14 @@ export default function App() {
           scrollY: 0,
           backgroundColor: "#ffffff",
           onclone: (clonedDoc) => {
-            const exportRoot = clonedDoc.querySelector('[data-pdf-export-root="true"]');
-            if (!exportRoot) return;
-            exportRoot.style.setProperty("-webkit-text-stroke", ".12px currentColor", "important");
-            exportRoot.querySelectorAll(".pdfCellTable").forEach((table) => {
-              table.style.setProperty("outline", ".12px solid #777", "important");
-              table.querySelectorAll("th,td").forEach((cell) => {
-                cell.style.setProperty("border-width", ".12px", "important");
-              });
-            });
+            const exportStyle = clonedDoc.createElement("style");
+            exportStyle.textContent = `
+              .pdfCellTable th,.pdfCellTable td{border-width:.2px!important}
+              .pdfCellTable{outline-width:.25px!important}
+              .pdfNew,.pdfNew *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+              .pdfNew{-webkit-text-stroke:.08px currentColor}
+            `;
+            clonedDoc.head.appendChild(exportStyle);
           },
         });
         const canvasScale = canvas.width / rootRect.width;
@@ -1425,7 +1424,7 @@ function PDFView({refx,form,totals}){
   const totalJasaTampil = totals.totalJasaAfterDisc ?? totals.totalJasa;
   const noEstimasi = form.noEstimasi || `EST-${new Date().toISOString().slice(0,10).replace(/-/g,"")}`;
 
-  return <div ref={refx} data-pdf-export-root={refx ? "true" : undefined} style={styles.pdfNew}>
+  return <div ref={refx} style={styles.pdfNew}>
     <style>{`.pdfCellTable{outline:.5px solid #666;outline-offset:-1px}.pdfCellTable th,.pdfCellTable td{border:.4px solid #777;padding:4px 6px;vertical-align:middle;line-height:1.2}.pdfCellTable th{font-weight:800;text-align:center;background:#edf3e8;font-size:11.2px}.pdfCellTable td{text-align:center}.pdfCellTable .left{text-align:left}.pdfCellTable .centerLabel{text-align:center!important}`}</style>
     <div style={styles.pdfHeaderBar}>
       <div>
@@ -1521,8 +1520,8 @@ pdfBottom:{display:"grid",gridTemplateColumns:"1.55fr 1fr 1fr 1fr",gap:6,marginT
 pdfNote:{border:"1px solid #333",padding:9,textAlign:"left",fontSize:10,lineHeight:1.25,minHeight:86},
 pdfSignBox:{border:"1px solid #333",padding:9,textAlign:"center",fontSize:11,minHeight:86},
 pdfThanks:{textAlign:"center",fontStyle:"italic",fontWeight:"700",marginTop:24},
-previewOverlay:{position:"fixed",inset:0,background:"rgba(0,0,0,.58)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:16},
-previewDialog:{background:"#f3f3f3",borderRadius:10,width:"min(1100px, 96vw)",height:"min(92vh, 900px)",display:"flex",flexDirection:"column",overflow:"hidden",boxShadow:"0 12px 40px rgba(0,0,0,.3)"},
-previewHeader:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",background:"#fff",borderBottom:"1px solid #ccc"},
-previewScroll:{overflow:"auto",flex:1},
-previewFooter:{padding:12,display:"flex",justifyContent:"flex-end",background:"#fff",borderTop:"1px solid #ccc"}};
+previewOverlay:{position:"fixed",inset:0,background:"rgba(0,0,0,.58)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:"8px max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left))"},
+previewDialog:{background:"#f3f3f3",borderRadius:10,width:"min(1100px, 96vw)",height:"min(92vh, 900px)",maxHeight:"calc(100dvh - 16px)",minHeight:0,display:"flex",flexDirection:"column",overflow:"hidden",boxShadow:"0 12px 40px rgba(0,0,0,.3)"},
+previewHeader:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",flex:"0 0 auto",background:"#fff",borderBottom:"1px solid #ccc"},
+previewScroll:{overflow:"auto",overflowY:"auto",flex:"1 1 auto",minHeight:0,WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"},
+previewFooter:{padding:"12px 16px calc(12px + env(safe-area-inset-bottom))",display:"flex",flex:"0 0 auto",justifyContent:"flex-end",background:"#fff",borderTop:"1px solid #ccc"}};
